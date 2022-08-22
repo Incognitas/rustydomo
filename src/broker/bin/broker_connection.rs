@@ -1,18 +1,8 @@
+use crate::data_structures::ConnectionData;
+use crate::errors::RustydomoError;
+
 use log::{debug, info, log_enabled, Level};
-use zmq::{Context, Socket, SocketEvent, SocketType};
-
-#[derive(Debug, Clone)]
-pub enum RustydomoError {
-    SocketCreationError(String),
-    SocketBindingError(String),
-    MonitorCreationError(String),
-}
-
-pub struct ConnectionData {
-    connection: Socket,
-    monitor_connection: Socket,
-}
-
+use zmq::{Context, SocketEvent, SocketType};
 /// .
 ///
 /// # Errors
