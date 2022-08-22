@@ -21,8 +21,10 @@ pub fn bind_router_connection(
         .bind(router_connection_string)
         .map_err(|err| RustydomoError::SocketBindingError(err.to_string()))?;
 
+    let events_to_follow =
+        SocketEvent::DISCONNECTED as i32 | SocketEvent::HANDSHAKE_SUCCEEDED as i32;
     router_socket
-        .monitor(monitor_connection_string, SocketEvent::ALL as i32)
+        .monitor(monitor_connection_string, events_to_follow)
         .map_err(|err| -> RustydomoError {
             RustydomoError::MonitorCreationError(err.to_string())
         })?;
@@ -31,6 +33,10 @@ pub fn bind_router_connection(
     // to create the connection to this monitor properly
     let monitor_connection = ctx
         .socket(SocketType::PAIR)
+        .map_err(|err| RustydomoError::MonitorCreationError(err.to_string()))?;
+
+    monitor_connection
+        .connect(monitor_connection_string)
         .map_err(|err| RustydomoError::MonitorCreationError(err.to_string()))?;
 
     info!("Listening to connections on '{}'", router_connection_string);

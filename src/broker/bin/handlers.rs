@@ -19,32 +19,41 @@ pub fn handle_service_messages(_sock: &ConnectionData) -> Result<(), RustydomoEr
 }
 
 // monitor handlers
-
-pub fn handle_client_monitor_messages(sock: &ConnectionData) -> Result<(), RustydomoError> {
+fn handle_monitor_message(source_name: &str, sock: &ConnectionData) -> Result<(), RustydomoError> {
+    debug!("Monitoring event received on {}", source_name);
     let content = receive_data(&sock.monitor_connection)?;
     if content.get_more() {
-        debug!("More data to receive on clients monitor");
         //read eventual extra data beforehand
-        let value = receive_data(&sock.monitor_connection)?;
+        let _value: u32 = MessageHelper {
+            m: receive_data(&sock.monitor_connection)?,
+        }
+        .try_into()?; // convert to u32 and make sure it went well
         let content_helper = MessageHelper { m: content };
 
         if let Ok(event_id) = <MessageHelper as TryInto<u16>>::try_into(content_helper) {
             match event_id {
-                x if x == zmq::SocketEvent::HANDSHAKE_SUCCEEDED as u16 => info!(
-                    "Client accepted : {}",
-                    value.as_str().unwrap().chars().next().unwrap() as u8
-                ),
-                x if x == zmq::SocketEvent::CLOSED as u16 => info!("Client connection closed"),
-                x if x == zmq::SocketEvent::DISCONNECTED as u16 => {
-                    info!("Client unexpectidely disconnected")
+                x if x == zmq::SocketEvent::HANDSHAKE_SUCCEEDED as u16 => {
+                    info!("{} accepted", source_name)
                 }
-                _ => (),
+                x if x == zmq::SocketEvent::CLOSED as u16 => {
+                    info!("{} connection closed", source_name)
+                }
+                x if x == zmq::SocketEvent::DISCONNECTED as u16 => {
+                    info!("{} disconnected", source_name)
+                }
+                _ => debug!("Unrecognized event : {}", event_id),
             }
+        } else {
+            debug!("Failed to convert event_id to u16");
         }
     }
     Ok(())
 }
 
-pub fn handle_service_monitor_messages(_sock: &ConnectionData) -> Result<(), RustydomoError> {
-    Ok(())
+pub fn handle_client_monitor_messages(sock: &ConnectionData) -> Result<(), RustydomoError> {
+    handle_monitor_message("Client", sock)
+}
+
+pub fn handle_service_monitor_messages(sock: &ConnectionData) -> Result<(), RustydomoError> {
+    handle_monitor_message("Service", sock)
 }

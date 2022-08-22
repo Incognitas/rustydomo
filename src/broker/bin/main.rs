@@ -42,7 +42,7 @@ fn main() -> ! {
                     .as_poll_item(zmq::POLLIN),
             ];
 
-            if let Err(_) = zmq::poll(&mut poll_list, -1) {
+            if let Err(_) = zmq::poll(&mut poll_list, 1000) {
                 Err(RustydomoError::Unknown)
             } else {
                 // V1 => filter then map
@@ -60,7 +60,8 @@ fn main() -> ! {
                     .filter_map(|(idx, entry)| -> Option<data_structures::SocketType> {
                         // if there are events on curent connection, just save the socket type
                         // so that it can be fetched afterwards
-                        if entry.get_revents() == zmq::POLLIN {
+
+                        if entry.get_revents() & zmq::POLLIN == zmq::POLLIN {
                             Some(
                                 data_structures::SocketType::try_from(idx)
                                     .expect("invalid socket type"),
