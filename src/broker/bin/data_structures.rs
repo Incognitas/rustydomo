@@ -1,5 +1,4 @@
 use crate::errors::RustydomoError;
-use log::debug;
 use zmq::{Message, Socket};
 
 pub enum SocketType {

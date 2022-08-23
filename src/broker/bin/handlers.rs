@@ -18,28 +18,35 @@ pub fn handle_service_messages(_sock: &ConnectionData) -> Result<(), RustydomoEr
     Ok(())
 }
 
-// monitor handlers
+// generic monitor handlers
 fn handle_monitor_message(source_name: &str, sock: &ConnectionData) -> Result<(), RustydomoError> {
-    debug!("Monitoring event received on {}", source_name);
     let content = receive_data(&sock.monitor_connection)?;
     if content.get_more() {
         //read eventual extra data beforehand
-        let _value: u32 = MessageHelper {
-            m: receive_data(&sock.monitor_connection)?,
-        }
-        .try_into()?; // convert to u32 and make sure it went well
+        let origin_addr = receive_data(&sock.monitor_connection)?;
+
+        // connection address received on second frame (as defined by zmq specification)
+
         let content_helper = MessageHelper { m: content };
 
         if let Ok(event_id) = <MessageHelper as TryInto<u16>>::try_into(content_helper) {
             match event_id {
                 x if x == zmq::SocketEvent::HANDSHAKE_SUCCEEDED as u16 => {
-                    info!("{} accepted", source_name)
+                    info!(
+                        "{} accepted on {}",
+                        source_name,
+                        origin_addr.as_str().unwrap_or("<unknown>")
+                    )
                 }
-                x if x == zmq::SocketEvent::CLOSED as u16 => {
-                    info!("{} connection closed", source_name)
-                }
+                // x if x == zmq::SocketEvent::CLOSED as u16 => {
+                //     info!("{} connection closed", source_name)
+                // }
                 x if x == zmq::SocketEvent::DISCONNECTED as u16 => {
-                    info!("{} disconnected", source_name)
+                    info!(
+                        "{} disconnected from {}",
+                        source_name,
+                        origin_addr.as_str().unwrap_or("<unknown>")
+                    )
                 }
                 _ => debug!("Unrecognized event : {}", event_id),
             }
