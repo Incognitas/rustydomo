@@ -4,6 +4,8 @@ pub enum RustydomoError {
     SocketBindingError(String),
     MonitorCreationError(String),
     CommunicationError(String),
+    UnrecognizedCommandType(u8),
+    ServiceNotAvailable(String),
     ConversionError,
     Unknown,
 }

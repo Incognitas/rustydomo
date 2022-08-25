@@ -2,15 +2,18 @@ mod broker_connection;
 mod data_structures;
 mod errors;
 mod handlers;
+mod majordomo_context;
 
 use crate::errors::RustydomoError;
 use data_structures::SocketType;
 use env_logger::Env;
 use log::info;
+use majordomo_context::MajordomoContext;
 use zmq::Context;
 
 fn main() -> ! {
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
+    println!("{}", "001".parse::<u32>().unwrap());
     info!("Welcome to The Majordomo Broker");
     let zmq_ctx = Context::new();
     info!("Creating clients related connection...");
@@ -28,6 +31,8 @@ fn main() -> ! {
         "inproc://monitor_services_router",
     )
     .expect("Failed to create services related connection");
+
+    let mut ctx = MajordomoContext::new();
 
     loop {
         let sockets_stimulated = {
@@ -76,8 +81,10 @@ fn main() -> ! {
 
         match sockets_stimulated {
             Ok(sockets_to_use) => sockets_to_use.iter().for_each(|type_| match type_ {
-                SocketType::ClientSocket => handlers::handle_client_messages(&clients_connection)
-                    .expect("Failed to handle client message"),
+                SocketType::ClientSocket => {
+                    handlers::handle_client_messages(&clients_connection, &mut ctx)
+                        .expect("Failed to handle client message")
+                }
                 SocketType::ClientMonitorSocket => {
                     handlers::handle_client_monitor_messages(&clients_connection)
                         .expect("Failed to handle client monitor message")
