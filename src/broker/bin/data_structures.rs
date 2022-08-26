@@ -72,3 +72,16 @@ impl TryInto<u32> for MessageHelper {
         }
     }
 }
+
+pub enum ClientInteractionType {
+    Request = 0x01,
+    Partial = 0x02,
+    Final = 0x03,
+}
+
+pub enum WorkerInteractionType {
+    Ready = 0x01,
+    Request = 0x02,
+    Partial = 0x03,
+    Final = 0x04,
+}
