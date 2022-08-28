@@ -9,7 +9,7 @@ def main():
     time.sleep(0.2)
 
     # always send empty frame at the beginning
-    sock.send_multipart([b"", b"MDPC02", bytes([0x01,]), b"UBER_SERVICE"]) 
+    sock.send_multipart([b"", b"MDPC02", bytes([0x01,]), b"UBER_SERVICE", b"UBER_PARAM"]) 
     time.sleep(1)
     sock.disconnect(addr)
     sock.close()

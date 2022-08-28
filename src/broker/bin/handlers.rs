@@ -23,13 +23,11 @@ fn extract_address_envelop(sock: &zmq::Socket) -> Result<VecDeque<Vec<u8>>, Rust
     let mut address_envelope: VecDeque<Vec<u8>> = VecDeque::new();
 
     let mut content = receive_data(&sock)?;
-    // note : *content converts Message to &[u8]  using Deref trait, so we can process it directly this way
-    address_envelope.push_back((*content).to_vec());
 
     // skip to the next empty frame in the multiple parts received
     while (*content).len() != 0 && content.get_more() {
-        content = receive_data(&sock)?;
         address_envelope.push_back((*content).to_vec());
+        content = receive_data(&sock)?;
     }
     // also add the empty frame to the address envelope
     address_envelope.push_back((*content).to_vec());
@@ -83,31 +81,31 @@ pub fn handle_client_messages(
         x if x == ClientInteractionType::Request as u8 => {
             debug!("Received client request");
             let worker_command_type: [u8; 1] = [WorkerInteractionType::Request as u8];
+            assert_eq!(final_payload.len(), 2);
             // convert client requet to worker request
-            final_payload.push(worker_command_type[..1].to_vec());
+            final_payload.push(worker_command_type.to_vec());
         }
         val => return Err(RustydomoError::UnrecognizedCommandType(val)),
     }
 
     // frame 2 : service name
-    let content = receive_data(&client_connection.connection)?;
-    let service_name = content.as_str().unwrap();
+    let mut content = receive_data(&client_connection.connection)?;
+    let service_name = content.as_str().unwrap().to_string();
     debug!("Service name called : {}", service_name);
-    if !ctx.can_handle_service(service_name) {
+    if !ctx.can_handle_service(&service_name) {
         return Err(RustydomoError::ServiceNotAvailable(service_name.into()));
     }
 
-    // dispatch frame to required service
-
     // next frames are service-specific
-    if content.get_more() {
-        while content.get_more() {
-            debug!("Extra frame provided as service specific information");
-            let content = receive_data(&client_connection.connection)?;
+    loop {
+        if content.get_more() {
+            content = receive_data(&client_connection.connection)?;
             final_payload.push((*content).to_vec());
+            debug!("Extra frame provided as service specific information");
+        } else {
+            break;
         }
     }
-
     // at this point we can just send the payload to be handled to context
     ctx.queue_task(service_name, final_payload)?;
 

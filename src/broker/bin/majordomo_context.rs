@@ -58,11 +58,15 @@ impl MajordomoContext {
 
     pub fn queue_task(
         self: &mut Self,
-        service_name: &str,
+        service_name: String,
         payload: Vec<Vec<u8>>,
     ) -> Result<(), RustydomoError> {
-        if self.can_handle_service(service_name) {
-            log::info!("Queuing task '{}'...", service_name);
+        if self.can_handle_service(&service_name) {
+            log::info!(
+                "Queuing task '{}' with payload length being {}...",
+                service_name,
+                payload.len()
+            );
             self.tasks_list.push(Task {
                 target_service: service_name.into(),
                 payload,
@@ -139,6 +143,11 @@ impl MajordomoContext {
                         task.target_service,
                         *entry
                     );
+                    //send identity first, the the rest of the payload
+                    workers_connection
+                        .connection
+                        .send(&entry.identity, zmq::SNDMORE)
+                        .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
 
                     workers_connection
                         .connection

@@ -32,10 +32,10 @@ def main():
         socks = dict(poller.poll(900))
         if sock in socks and socks[sock] == zmq.POLLIN :
             message = sock.recv_multipart()
-            for entry in message:
-                print("received : ", "-".join([binascii.hexlify(i) for i in message]))
+            print("message length :", len(message))
+            print("received : ", b"-".join([binascii.hexlify(i) for i in message]))
         # send periodic heartbeat
-        print("HEARTBEAT...")
+        # print("HEARTBEAT...")
         sock.send_multipart([b"", b"MDPW02", bytes([0x05,])])
 
     sock.disconnect(addr)
