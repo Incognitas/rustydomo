@@ -7,5 +7,5 @@ pub enum RustydomoError {
     UnrecognizedCommandType(u8),
     ServiceNotAvailable(String),
     ConversionError,
-    Unknown,
+    Unknown(String),
 }

@@ -53,6 +53,9 @@ pub fn handle_client_messages(
     // Frames 3+: Request body (opaque binary)
     let mut final_payload: Vec<Vec<u8>> = Vec::new();
 
+    // TODO: replace iter used to fetch command with a single read multipart which fills a
+    // Vec<Vec<u8>>. It it will be more optimal
+
     let address_envelope = extract_address_envelop(&client_connection.connection)?;
     final_payload.extend(address_envelope);
     // finally retrieve the first element of the actual content
@@ -149,9 +152,12 @@ pub fn handle_worker_messages(
         x if x == WorkerInteractionType::Ready as u8 => {
             let service_name = receive_data(&worker_connection.connection)?;
             ctx.register_worker(
-                address_envelope.get(0).unwrap().clone(),
+                &address_envelope.get(0).unwrap(),
                 service_name.as_str().unwrap(),
             )?;
+        }
+        x if x == WorkerInteractionType::Heartbeat as u8 => {
+            ctx.refresh_expiration_time(&address_envelope[0]);
         }
         x if x == WorkerInteractionType::Partial as u8 => {
             // remove identity address added by the dealer of the worker

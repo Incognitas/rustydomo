@@ -21,7 +21,10 @@ impl TryFrom<usize> for SocketType {
             x if x == SocketType::WorkerMonitorSocket as usize => {
                 Ok(SocketType::WorkerMonitorSocket)
             }
-            _ => Err(RustydomoError::Unknown),
+            val => Err(RustydomoError::Unknown(std::format!(
+                "Unknown socket type : {}",
+                val
+            ))),
         }
     }
 }
@@ -84,4 +87,5 @@ pub enum WorkerInteractionType {
     Request = 0x02,
     Partial = 0x03,
     Final = 0x04,
+    Heartbeat = 0x05,
 }

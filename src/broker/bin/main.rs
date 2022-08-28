@@ -47,35 +47,36 @@ fn main() -> ! {
                     .as_poll_item(zmq::POLLIN),
             ];
 
-            if let Err(_) = zmq::poll(&mut poll_list, 100) {
-                Err(RustydomoError::Unknown)
-            } else {
-                // V1 => filter then map
-                /*Ok(poll_list
-                .into_iter()
-                .enumerate()
-                .filter(|(_, entry)| -> bool { entry.get_revents() == zmq::POLLIN })
-                .map(|(idx, _)| SocketType::try_from(idx).expect("invalid socket type"))
-                .collect::<Vec<SocketType>>())
-                */
-                // V2 => filter_map directly
-                Ok(poll_list
+            match zmq::poll(&mut poll_list, 400) {
+                Ok(_) => {
+                    // V1 => filter then map
+                    /*Ok(poll_list
                     .into_iter()
                     .enumerate()
-                    .filter_map(|(idx, entry)| -> Option<data_structures::SocketType> {
-                        // if there are events on curent connection, just save the socket type
-                        // so that it can be fetched afterwards
+                    .filter(|(_, entry)| -> bool { entry.get_revents() == zmq::POLLIN })
+                    .map(|(idx, _)| SocketType::try_from(idx).expect("invalid socket type"))
+                    .collect::<Vec<SocketType>>())
+                    */
+                    // V2 => filter_map directly
+                    Ok(poll_list
+                        .into_iter()
+                        .enumerate()
+                        .filter_map(|(idx, entry)| -> Option<data_structures::SocketType> {
+                            // if there are events on curent connection, just save the socket type
+                            // so that it can be fetched afterwards
 
-                        if entry.get_revents() & zmq::POLLIN == zmq::POLLIN {
-                            Some(
-                                data_structures::SocketType::try_from(idx)
-                                    .expect("invalid socket type"),
-                            )
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<data_structures::SocketType>>())
+                            if entry.get_revents() & zmq::POLLIN == zmq::POLLIN {
+                                Some(
+                                    data_structures::SocketType::try_from(idx)
+                                        .expect("invalid socket type"),
+                                )
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<data_structures::SocketType>>())
+                }
+                Err(err) => Err(RustydomoError::Unknown(err.to_string())),
             }
         };
 
@@ -100,9 +101,10 @@ fn main() -> ! {
                         .expect("Failed to handle service monitor message")
                 }
             }),
-            _ => panic!("Erreur hein ?"),
+            _ => log::debug!("Erreur hein ?"),
         };
 
         ctx.process_tasks(&workers_connection).unwrap();
+        ctx.check_expired_workers();
     }
 }
