@@ -5,7 +5,7 @@ pub enum SocketType {
     ClientSocket = 0,
     ClientMonitorSocket,
     ServiceSocket,
-    ServiceMonitorSocket,
+    WorkerMonitorSocket,
 }
 
 impl TryFrom<usize> for SocketType {
@@ -18,8 +18,8 @@ impl TryFrom<usize> for SocketType {
                 Ok(SocketType::ClientMonitorSocket)
             }
             x if x == SocketType::ServiceSocket as usize => Ok(SocketType::ServiceSocket),
-            x if x == SocketType::ServiceMonitorSocket as usize => {
-                Ok(SocketType::ServiceMonitorSocket)
+            x if x == SocketType::WorkerMonitorSocket as usize => {
+                Ok(SocketType::WorkerMonitorSocket)
             }
             _ => Err(RustydomoError::Unknown),
         }

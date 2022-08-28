@@ -25,7 +25,7 @@ fn main() -> ! {
     .expect("Failed to create clients connection");
 
     info!("Creating services related connection...");
-    let services_connection = broker_connection::bind_router_connection(
+    let workers_connection = broker_connection::bind_router_connection(
         &zmq_ctx,
         "tcp://*:6000",
         "inproc://monitor_services_router",
@@ -41,13 +41,13 @@ fn main() -> ! {
                 clients_connection
                     .monitor_connection
                     .as_poll_item(zmq::POLLIN),
-                services_connection.connection.as_poll_item(zmq::POLLIN),
-                services_connection
+                workers_connection.connection.as_poll_item(zmq::POLLIN),
+                workers_connection
                     .monitor_connection
                     .as_poll_item(zmq::POLLIN),
             ];
 
-            if let Err(_) = zmq::poll(&mut poll_list, 1000) {
+            if let Err(_) = zmq::poll(&mut poll_list, 100) {
                 Err(RustydomoError::Unknown)
             } else {
                 // V1 => filter then map
@@ -89,16 +89,20 @@ fn main() -> ! {
                     handlers::handle_client_monitor_messages(&clients_connection)
                         .expect("Failed to handle client monitor message")
                 }
-                SocketType::ServiceSocket => {
-                    handlers::handle_service_messages(&services_connection)
-                        .expect("Failed to handle service message")
-                }
-                SocketType::ServiceMonitorSocket => {
-                    handlers::handle_service_monitor_messages(&services_connection)
+                SocketType::ServiceSocket => handlers::handle_worker_messages(
+                    &clients_connection,
+                    &workers_connection,
+                    &mut ctx,
+                )
+                .expect("Failed to handle service message"),
+                SocketType::WorkerMonitorSocket => {
+                    handlers::handle_worker_monitor_messages(&workers_connection)
                         .expect("Failed to handle service monitor message")
                 }
             }),
             _ => panic!("Erreur hein ?"),
         };
+
+        ctx.process_tasks(&workers_connection).unwrap();
     }
 }
