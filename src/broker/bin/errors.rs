@@ -6,6 +6,6 @@ pub enum RustydomoError {
     CommunicationError(String),
     UnrecognizedCommandType(u8),
     ServiceNotAvailable(String),
-    ConversionError,
+    ConversionError(String),
     Unknown(String),
 }

@@ -1,9 +1,10 @@
 import zmq
-import time 
+import time
 import binascii
 import signal
 
 termination_signal = False
+
 
 def term_signal(signal, _stackframe):
     global termination_signal
@@ -22,25 +23,45 @@ def main():
     time.sleep(0.2)
 
     # always send empty frame at the beginning
-    sock.send_multipart([b"", b"MDPW02", bytes([0x01,]), b"UBER_SERVICE"]) 
+    sock.send_multipart(
+        [
+            b"",
+            b"MDPW02",
+            bytes(
+                [
+                    0x01,
+                ]
+            ),
+            b"UBER_SERVICE",
+        ]
+    )
 
-    poller:zmq.Poller = zmq.Poller()
+    poller: zmq.Poller = zmq.Poller()
     poller.register(sock, zmq.POLLIN)
 
     ended = False
     while not termination_signal:
         socks = dict(poller.poll(900))
-        if sock in socks and socks[sock] == zmq.POLLIN :
+        if sock in socks and socks[sock] == zmq.POLLIN:
             message = sock.recv_multipart()
             print("message length :", len(message))
             print("received : ", b"-".join([binascii.hexlify(i) for i in message]))
         # send periodic heartbeat
         # print("HEARTBEAT...")
-        sock.send_multipart([b"", b"MDPW02", bytes([0x05,])])
+        sock.send_multipart(
+            [
+                b"",
+                b"MDPW02",
+                bytes(
+                    [
+                        0x05,
+                    ]
+                ),
+            ]
+        )
 
     sock.disconnect(addr)
     sock.close()
-
 
 
 if __name__ == "__main__":

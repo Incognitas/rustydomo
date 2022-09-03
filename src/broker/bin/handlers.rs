@@ -19,6 +19,15 @@ fn receive_data(sock: &Socket) -> Result<Message, RustydomoError> {
     msg
 }
 
+// FIXME: should we use this instead of receive frame by frame ?
+// fn receive_all_data(sock: &Socket) -> Result<Vec<Vec<u8>>, RustydomoError> {
+//     let msg = sock
+//         .recv_multipart(0)
+//         .map_err(|err| RustydomoError::CommunicationError(err.to_string()));
+//
+//     msg
+// }
+
 fn extract_address_envelop(sock: &zmq::Socket) -> Result<VecDeque<Vec<u8>>, RustydomoError> {
     let mut address_envelope: VecDeque<Vec<u8>> = VecDeque::new();
 
@@ -58,11 +67,10 @@ pub fn handle_client_messages(
     final_payload.extend(address_envelope);
     // finally retrieve the first element of the actual content
 
-    // frame 0 read and handled here
-    let content = receive_data(&client_connection.connection)?;
-
     // ensure that we are reading a valid MDP client signa by checking its headerl
     {
+        // frame 0 read and handled here
+        let content = receive_data(&client_connection.connection)?;
         let obtained = content.as_str().unwrap();
         if obtained != EXPECTED_CLIENT_VERSION_HEADER {
             return Err(RustydomoError::CommunicationError(std::format!(
@@ -155,7 +163,7 @@ pub fn handle_worker_messages(
             )?;
         }
         x if x == WorkerInteractionType::Heartbeat as u8 => {
-            ctx.refresh_expiration_time(&address_envelope[0]);
+            ctx.refresh_expiration_time(&address_envelope[0])?;
         }
         x if x == WorkerInteractionType::Partial as u8 => {
             // remove identity address added by the dealer of the worker
