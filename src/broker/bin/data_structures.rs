@@ -52,7 +52,9 @@ impl TryInto<u16> for MessageHelper {
             // return the obtained value
             Ok(u16::from_ne_bytes(fixed_array))
         } else {
-            Err(RustydomoError::ConversionError)
+            Err(RustydomoError::ConversionError(
+                "Failed to convert value to u16".to_string(),
+            ))
         }
     }
 }
@@ -71,8 +73,47 @@ impl TryInto<u32> for MessageHelper {
             // return the obtained value
             Ok(u32::from_ne_bytes(fixed_array))
         } else {
-            Err(RustydomoError::ConversionError)
+            Err(RustydomoError::ConversionError(
+                "Failed to convert value to u32".to_string(),
+            ))
         }
+    }
+}
+
+#[derive(Clone, PartialEq, Copy)]
+pub struct Identity {
+    pub value: u32, // the only members that matter
+    _private: (),   // make sure this can not be instanciated directly }
+}
+
+impl TryFrom<&[u8]> for Identity {
+    type Error = RustydomoError;
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        if value.len() < 4 || value.len() > 5 {
+            Err(RustydomoError::ConversionError(
+                "Identity conversion failed".to_string(),
+            ))
+        } else {
+            let mut array_to_parse: [u8; 4] = Default::default();
+            // identity is sent as an array of 5 bytes
+            // 0x00 + 4 random bytes
+            // so we have to take care if ignoring the leading 0 and start at offset 1
+            array_to_parse.copy_from_slice(&value[value.len() - 4..]);
+            Ok(Identity {
+                value: u32::from_ne_bytes(array_to_parse),
+                _private: (),
+            })
+        }
+    }
+}
+
+impl Into<Vec<u8>> for Identity {
+    fn into(self) -> Vec<u8> {
+        // the resturned identity SHALL be 5 bytes logs, not 4
+        let array = self.value.to_ne_bytes();
+        let mut result: Vec<u8> = vec![0];
+        result.extend_from_slice(&array);
+        result
     }
 }
 
