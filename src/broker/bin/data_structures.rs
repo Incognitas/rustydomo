@@ -98,7 +98,7 @@ impl TryFrom<&[u8]> for Identity {
             // identity is sent as an array of 5 bytes
             // 0x00 + 4 random bytes
             // so we have to take care if ignoring the leading 0 and start at offset 1
-            array_to_parse.copy_from_slice(&value[value.len() - 5..]);
+            array_to_parse.copy_from_slice(&value[value.len() - 4..]);
             Ok(Identity {
                 value: u32::from_ne_bytes(array_to_parse),
                 _private: (),

@@ -1,7 +1,7 @@
 use crate::data_structures::{ConnectionData, Identity};
 use crate::errors::RustydomoError;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::{Display, Error, Formatter};
 use std::rc::Rc;
 
@@ -26,7 +26,7 @@ struct Task {
 }
 
 pub struct MajordomoContext {
-    registered_workers: Vec<Rc<RefCell<ServiceInfo>>>,
+    registered_workers: VecDeque<Rc<RefCell<ServiceInfo>>>,
     tasks_list: Vec<Task>,
     services: HashMap<String, Vec<Rc<RefCell<ServiceInfo>>>>,
 }
@@ -34,7 +34,7 @@ pub struct MajordomoContext {
 impl MajordomoContext {
     pub fn new() -> Self {
         MajordomoContext {
-            registered_workers: Vec::new(),
+            registered_workers: VecDeque::new(),
             tasks_list: Vec::new(),
             services: HashMap::new(),
         }
@@ -94,7 +94,7 @@ impl MajordomoContext {
             identity: Identity::try_from(identity).unwrap(),
             expiration_date: std::time::Instant::now() + EXPIRATION_TIME,
         }));
-        self.registered_workers.push(value_to_insert.clone());
+        self.registered_workers.push_front(value_to_insert.clone());
         log::info!(
             "Registered new worker for service '{}'. Identity : '{}'",
             service_name,
@@ -124,16 +124,17 @@ impl MajordomoContext {
     ///
     pub fn refresh_expiration_time(self: &mut Self, identity: &[u8]) -> Result<(), RustydomoError> {
         let mut idx = 0;
+        let searched_identity: Identity = Identity::try_from(identity)?;
         loop {
             match self.registered_workers.get(idx) {
                 Some(cur_id) => {
-                    if cur_id.borrow().identity == Identity::try_from(identity)? {
+                    if cur_id.borrow().identity == searched_identity {
                         // found entry, no refresh its expiration time
-                        let cur_entry = self.registered_workers.remove(idx);
+                        let cur_entry = self.registered_workers.remove(idx).unwrap();
                         // update with new expiration date before reinserting it
                         cur_entry.borrow_mut().expiration_date =
                             std::time::Instant::now() + EXPIRATION_TIME;
-                        self.registered_workers.push(cur_entry);
+                        self.registered_workers.push_front(cur_entry);
                         break;
                     } else {
                         idx += 1;
@@ -146,6 +147,9 @@ impl MajordomoContext {
         Ok(())
     }
 
+    ///
+    /// Send all requested tasks to all available workers
+    /// This apply a simple round robin mechnism to balance work between multiple workers
     pub fn process_tasks(
         self: &mut Self,
         workers_connection: &ConnectionData,
@@ -154,14 +158,15 @@ impl MajordomoContext {
             return Ok(());
         }
 
-        let mut tasks_handled = Vec::new();
-
         for i in 0..self.tasks_list.len() {
             let task: &Task = self.tasks_list.get(i).unwrap();
-            let worker = self
-                .registered_workers
-                .iter_mut()
-                .find(|entry| entry.borrow().service_name == task.target_service);
+            //             let worker = self
+            //                 .registered_workers
+            //                 .iter_mut()
+            //                 .find(|entry| entry.borrow().service_name == task.target_service);
+
+            let avail_workers = self.services.get_mut(&task.target_service).unwrap();
+            let worker = avail_workers.first();
 
             match worker {
                 Some(entry) => {
@@ -180,7 +185,11 @@ impl MajordomoContext {
                         .connection
                         .send_multipart(task.payload.iter(), 0)
                         .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
-                    tasks_handled.push(i);
+
+                    // rotate worker in a round robin fashion afterwards
+                    if avail_workers.len() > 1 {
+                        avail_workers.rotate_left(1);
+                    }
                 }
                 None => log::debug!(
                     "Task for service '{}' not handled this turn",
@@ -188,13 +197,9 @@ impl MajordomoContext {
                 ),
             }
         }
-        if !tasks_handled.is_empty() {
-            // cleanup all indexes of tasks that have been handled up to now
-            tasks_handled.iter_mut().rev().for_each(|idx| {
-                self.tasks_list.swap_remove(*idx);
-            });
-        }
 
+        // clear all content of tasks list
+        self.tasks_list.clear();
         Ok(())
     }
 
@@ -202,13 +207,41 @@ impl MajordomoContext {
         // just fetch from start until we reach a point where we are not considered expired (they
         // are already sorted from the older to the newest
         let ref_time = std::time::Instant::now();
-        let nb_known_workers = self.registered_workers.len();
-        self.registered_workers
-            .retain(|entry| entry.borrow().expiration_date >= ref_time);
-        let nb_workers_removed = nb_known_workers - self.registered_workers.len();
 
-        if nb_workers_removed > 0 {
-            log::debug!("Workers removed after expiration : {}", nb_workers_removed);
+        loop {
+            if let Some(curentry) = self.registered_workers.back() {
+                if curentry.borrow().expiration_date < ref_time {
+                    let associated_node = self
+                        .registered_workers
+                        .remove(self.registered_workers.len() - 1)
+                        .unwrap();
+                    // remove also the entry from services worker list
+                    let local_workers = self
+                        .services
+                        .get_mut(&associated_node.borrow().service_name)
+                        .unwrap();
+                    let old_len = local_workers.len();
+
+                    local_workers.retain(|entry| !Rc::ptr_eq(&entry, &associated_node));
+                    log::debug!(
+                        "Service workers removed : {}",
+                        old_len - local_workers.len()
+                    );
+                } else {
+                    // assume all next elements are also ok in terms of expiration date
+                    break;
+                }
+            } else {
+                break;
+            }
         }
+        // let nb_known_workers = self.registered_workers.len();
+        // self.registered_workers
+        //     .retain(|entry| entry.borrow().expiration_date >= ref_time);
+        // let nb_workers_removed = nb_known_workers - self.registered_workers.len();
+
+        // if nb_workers_removed > 0 {
+        //     log::debug!("Workers removed after expiration : {}", nb_workers_removed);
+        // }
     }
 }
