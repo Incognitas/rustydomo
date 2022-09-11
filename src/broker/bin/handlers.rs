@@ -165,6 +165,10 @@ pub fn handle_worker_messages(
             ctx.refresh_expiration_time(&worker_identity)?;
         }
         x if x == WorkerInteractionType::Partial as u8 => {
+            // any time we receive a command from worker, refresh its expiration time ( not only
+            // on heartbeat)
+            ctx.refresh_expiration_time(&worker_identity)?;
+
             let client_identity = receive_data(&worker_connection.connection)?;
             clients_connection
                 .connection
@@ -191,7 +195,9 @@ pub fn handle_worker_messages(
             )?;
         }
         x if x == WorkerInteractionType::Final as u8 => {
-            log::debug!("Worker::Final received !");
+            // any time we receive a command from worker, refresh its expiration time ( not only
+            // on heartbeat)
+            ctx.refresh_expiration_time(&worker_identity)?;
             let client_identity = receive_data(&worker_connection.connection)?;
             clients_connection
                 .connection
