@@ -1,4 +1,4 @@
-use crate::data_structures::{ConnectionData, Identity};
+use crate::data_structures::{ConnectionData, Identity, WorkerInteractionType};
 use crate::errors::RustydomoError;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -92,7 +92,7 @@ impl MajordomoContext {
         let value_to_insert = Rc::new(RefCell::new(ServiceInfo {
             service_name: service_name.into(),
             identity: Identity::try_from(identity).unwrap(),
-            expiration_date: std::time::Instant::now() + EXPIRATION_TIME,
+            expiration_date: std::time::Instant::now() + (EXPIRATION_TIME * 4),
         }));
         self.registered_workers.push_front(value_to_insert.clone());
         log::info!(
@@ -147,6 +147,32 @@ impl MajordomoContext {
         Ok(())
     }
 
+    pub fn remove_worker(self: &mut Self, identity: &[u8]) -> Result<(), RustydomoError> {
+        let searched_identity: Identity = Identity::try_from(identity)?;
+        log::debug!("Removing worker (cause : DISCONNECT received)");
+
+        let found_worker = self
+            .registered_workers
+            .iter()
+            .position(|entry| entry.borrow().identity == searched_identity);
+
+        if let Some(pos) = found_worker {
+            let removed_value = self.registered_workers.remove(pos).unwrap();
+            let service_workers = self
+                .services
+                .get_mut(&removed_value.borrow().service_name)
+                .unwrap();
+            service_workers.retain(|entry| !Rc::ptr_eq(&entry, &removed_value));
+            log::debug!("Worker removed");
+        } else {
+            return Err(RustydomoError::ServiceNotAvailable(format!(
+                "Identity : {:08X}",
+                searched_identity.value
+            )));
+        }
+
+        Ok(())
+    }
     ///
     /// Send all requested tasks to all available workers
     /// This apply a simple round robin mechnism to balance work between multiple workers
@@ -179,6 +205,11 @@ impl MajordomoContext {
                     workers_connection
                         .connection
                         .send::<Vec<u8>>(entry.borrow().identity.into(), zmq::SNDMORE)
+                        .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
+
+                    workers_connection
+                        .connection
+                        .send::<&[u8]>("MDPW02".as_bytes(), zmq::SNDMORE)
                         .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
 
                     workers_connection
@@ -235,13 +266,24 @@ impl MajordomoContext {
                 break;
             }
         }
-        // let nb_known_workers = self.registered_workers.len();
-        // self.registered_workers
-        //     .retain(|entry| entry.borrow().expiration_date >= ref_time);
-        // let nb_workers_removed = nb_known_workers - self.registered_workers.len();
+    }
 
-        // if nb_workers_removed > 0 {
-        //     log::debug!("Workers removed after expiration : {}", nb_workers_removed);
-        // }
+    pub fn send_heartbeat(self: &Self, worker_sock: &zmq::Socket) -> Result<(), RustydomoError> {
+        let hearbeat_command: Vec<u8> = vec![WorkerInteractionType::Heartbeat as u8];
+
+        for worker in self.registered_workers.iter() {
+            worker_sock
+                .send::<Vec<u8>>(worker.borrow().identity.into(), zmq::SNDMORE)
+                .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
+            // send appropriate header
+            worker_sock
+                .send("MDPW02".as_bytes(), zmq::SNDMORE)
+                .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
+            // send the final part of the command (the actual HEARTBEAT payload)
+            worker_sock
+                .send::<&[u8]>(&hearbeat_command, 0)
+                .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
+        }
+        Ok(())
     }
 }

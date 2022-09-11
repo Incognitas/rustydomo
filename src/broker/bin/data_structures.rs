@@ -129,4 +129,5 @@ pub enum WorkerInteractionType {
     Partial = 0x03,
     Final = 0x04,
     Heartbeat = 0x05,
+    Disconnect = 0x06,
 }

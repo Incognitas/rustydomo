@@ -106,5 +106,6 @@ fn main() -> ! {
 
         ctx.process_tasks(&workers_connection).unwrap();
         ctx.check_expired_workers();
+        ctx.send_heartbeat(&workers_connection.connection).unwrap();
     }
 }

@@ -1,7 +1,5 @@
-use std::collections::VecDeque;
-
 use crate::data_structures::{
-    ClientInteractionType, ConnectionData, MessageHelper, WorkerInteractionType,
+    ClientInteractionType, ConnectionData, Identity, MessageHelper, WorkerInteractionType,
 };
 use crate::errors::RustydomoError;
 use crate::majordomo_context::MajordomoContext;
@@ -19,36 +17,6 @@ fn receive_data(sock: &Socket) -> Result<Message, RustydomoError> {
     msg
 }
 
-// FIXME: should we use this instead of receive frame by frame ?
-// fn receive_all_data(sock: &Socket) -> Result<Vec<Vec<u8>>, RustydomoError> {
-//     let msg = sock
-//         .recv_multipart(0)
-//         .map_err(|err| RustydomoError::CommunicationError(err.to_string()));
-//
-//     msg
-// }
-
-fn extract_address_envelop(sock: &zmq::Socket) -> Result<VecDeque<Vec<u8>>, RustydomoError> {
-    let mut address_envelope: VecDeque<Vec<u8>> = VecDeque::new();
-
-    let mut content = receive_data(&sock)?;
-
-    // skip to the next empty frame in the multiple parts received
-    while (*content).len() != 0 && content.get_more() {
-        address_envelope.push_back((*content).to_vec());
-        content = receive_data(&sock)?;
-    }
-    // also add the empty frame to the address envelope
-    address_envelope.push_back((*content).to_vec());
-
-    if !content.get_more() {
-        return Err(RustydomoError::CommunicationError(
-            "Not enough frames received".into(),
-        ));
-    }
-    Ok(address_envelope)
-}
-
 pub fn handle_client_messages(
     client_connection: &ConnectionData,
     ctx: &mut MajordomoContext,
@@ -63,11 +31,12 @@ pub fn handle_client_messages(
     // TODO: replace iter used to fetch command with a single read multipart which fills a
     // Vec<Vec<u8>>. It it will be more optimal
 
-    let address_envelope = extract_address_envelop(&client_connection.connection)?;
-    final_payload.extend(address_envelope);
-    // finally retrieve the first element of the actual content
+    // finally retrieve the first element of the actual content : the client id
+    let client_id = receive_data(&client_connection.connection)?;
+    let id = Identity::try_from(&(*client_id)).unwrap();
+    log::debug!("Client {:08X} connected", id.value);
 
-    // ensure that we are reading a valid MDP client signa by checking its headerl
+    // ensure that we are reading a valid MDP client signa by checking its header
     {
         // frame 0 read and handled here
         let content = receive_data(&client_connection.connection)?;
@@ -88,10 +57,14 @@ pub fn handle_client_messages(
     match command_type {
         x if x == ClientInteractionType::Request as u8 => {
             debug!("Received client request");
+
             let worker_command_type: [u8; 1] = [WorkerInteractionType::Request as u8];
-            assert_eq!(final_payload.len(), 2);
             // convert client requet to worker request
             final_payload.push(worker_command_type.to_vec());
+            // do not forget to add the client id in the frame to send
+            final_payload.push((*client_id).to_vec());
+            // then an  empty frame
+            final_payload.push(vec![]);
         }
         val => return Err(RustydomoError::UnrecognizedCommandType(val)),
     }
@@ -120,6 +93,34 @@ pub fn handle_client_messages(
     Ok(())
 }
 
+#[allow(dead_code)]
+fn display_content(entry: &[u8]) {
+    log::debug!(
+        "{}",
+        entry
+            .iter()
+            .map(|val| std::format!("{:02X}", val))
+            .collect::<String>()
+    );
+}
+
+fn send_residual_data(
+    sock_to_read: &zmq::Socket,
+    sock_to_send_to: &zmq::Socket,
+) -> Result<(), RustydomoError> {
+    loop {
+        let data = receive_data(&sock_to_read)?;
+        let has_more = data.get_more();
+        sock_to_send_to
+            .send(data, if has_more { zmq::SNDMORE } else { 0 })
+            .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
+        if !has_more {
+            break;
+        }
+    }
+    Ok(())
+}
+
 ///
 /// Handles all messges sent by workers$
 ///
@@ -129,7 +130,6 @@ pub fn handle_client_messages(
 /// * `worker_connection` - socket used to receive data from workers
 /// * `ctx` - context linked to Majordomo handling
 ///
-
 pub fn handle_worker_messages(
     clients_connection: &ConnectionData,
     worker_connection: &ConnectionData,
@@ -138,7 +138,8 @@ pub fn handle_worker_messages(
     // Frame 0: “MDPW02” (six bytes, representing MDP/Worker v0.2)
     // Frame 1: (one byte, representing READY / REQUEST / HEARTBEAT)
     // next frames are context specific and application specific
-    let mut address_envelope = extract_address_envelop(&worker_connection.connection)?;
+    let worker_identity = receive_data(&worker_connection.connection)?;
+    assert!(worker_identity.len() == 5);
 
     // parse command type (frame 0)
     let content = receive_data(&worker_connection.connection)?;
@@ -157,43 +158,69 @@ pub fn handle_worker_messages(
     match (*content)[0] {
         x if x == WorkerInteractionType::Ready as u8 => {
             let service_name = receive_data(&worker_connection.connection)?;
-            ctx.register_worker(
-                &address_envelope.get(0).unwrap(),
-                service_name.as_str().unwrap(),
-            )?;
+            ctx.register_worker(&worker_identity, service_name.as_str().unwrap())?;
         }
         x if x == WorkerInteractionType::Heartbeat as u8 => {
-            ctx.refresh_expiration_time(&address_envelope[0])?;
+            ctx.refresh_expiration_time(&worker_identity)?;
         }
         x if x == WorkerInteractionType::Partial as u8 => {
-            // remove identity address added by the dealer of the worker
-            address_envelope.pop_front().unwrap();
-            // what is left in envelope is just the identity of the client which called the service
+            let client_identity = receive_data(&worker_connection.connection)?;
             clients_connection
                 .connection
-                .send_multipart(address_envelope.iter(), zmq::SNDMORE)
+                .send(client_identity, zmq::SNDMORE)
+                .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
+
+            clients_connection
+                .connection
+                .send::<&[u8]>("MDPC02".as_bytes(), zmq::SNDMORE)
                 .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
 
             let data_to_send: [u8; 1] = [ClientInteractionType::Partial as u8];
             clients_connection
                 .connection
-                .send(&data_to_send[..1], 0 /* nop more frames to send */)
+                .send(
+                    data_to_send.as_slice(),
+                    0, /* nop more frames to send */
+                )
                 .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
+
+            send_residual_data(
+                &worker_connection.connection,
+                &clients_connection.connection,
+            )?;
         }
         x if x == WorkerInteractionType::Final as u8 => {
-            // remove identity address added by the dealer of the worker
-            let _worker_identity = address_envelope.pop_front().unwrap();
-            // what is left in envelope is just the identity of the client which called the service
+            log::debug!("Worker::Final received !");
+            let client_identity = receive_data(&worker_connection.connection)?;
             clients_connection
                 .connection
-                .send_multipart(address_envelope.iter(), zmq::SNDMORE)
+                .send(client_identity, zmq::SNDMORE)
+                .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
+
+            clients_connection
+                .connection
+                .send::<&[u8]>("MDPC02".as_bytes(), zmq::SNDMORE)
                 .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
 
             let data_to_send: [u8; 1] = [ClientInteractionType::Final as u8];
             clients_connection
                 .connection
-                .send(&data_to_send[..1], 0 /* nop more frames to send */)
+                .send(data_to_send.as_slice(), zmq::SNDMORE)
                 .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
+
+            send_residual_data(
+                &worker_connection.connection,
+                &clients_connection.connection,
+            )?;
+            log::debug!("End of extra frames");
+        }
+        x if x == WorkerInteractionType::Disconnect as u8 => {
+            ctx.remove_worker(&worker_identity).unwrap_or_else(|err| {
+                log::warn!(
+                    "Error while trying to remove worker from list of known workers {}",
+                    err.to_string()
+                )
+            });
         }
 
         _ => todo!(),

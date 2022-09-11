@@ -1,6 +1,11 @@
 import zmq
 import time
+from typing import List
+import binascii
 
+
+def formatted_frames(frames: List[bytes]) -> str:
+    return b"-".join([binascii.hexlify(i) for i in frames]).decode()
 
 def main():
     addr = "tcp://127.0.0.1:5000"
@@ -9,10 +14,8 @@ def main():
     sock.connect(addr)
     time.sleep(0.2)
 
-    # always send empty frame at the beginning
     sock.send_multipart(
         [
-            b"",
             b"MDPC02",
             bytes(
                 [
@@ -23,7 +26,9 @@ def main():
             b"UBER_PARAM",
         ]
     )
-    time.sleep(1)
+    fullcontent = sock.recv_multipart()
+    print(formatted_frames(fullcontent))
+
     sock.disconnect(addr)
     sock.close()
 
