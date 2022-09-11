@@ -1,4 +1,4 @@
-use crate::data_structures::{ConnectionData, Identity, WorkerInteractionType};
+use crate::data_structures::{Identity, WorkerInteractionType};
 use crate::errors::RustydomoError;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -20,14 +20,13 @@ impl Display for ServiceInfo {
     }
 }
 
-struct Task {
-    target_service: String,
-    payload: Vec<Vec<u8>>,
-}
-
+///
+/// Base context used to carry all useful informations for proper broker interactiions management
+///
 pub struct MajordomoContext {
+    /// List of all registered workers jnown to the system
     registered_workers: VecDeque<Rc<RefCell<ServiceInfo>>>,
-    tasks_list: Vec<Task>,
+    /// List of workers registered by service name
     services: HashMap<String, Vec<Rc<RefCell<ServiceInfo>>>>,
 }
 
@@ -35,7 +34,6 @@ impl MajordomoContext {
     pub fn new() -> Self {
         MajordomoContext {
             registered_workers: VecDeque::new(),
-            tasks_list: Vec::new(),
             services: HashMap::new(),
         }
     }
@@ -54,8 +52,22 @@ impl MajordomoContext {
             .any(|entry| entry.borrow().service_name == service_name)
     }
 
-    pub fn queue_task(
+    ///
+    /// Registeres given task and sent its associated payload to next available worker
+    ///
+    /// Note: if multiple workers are registerd to handle, the workers are selected in a round
+    /// robin fashion to ensure proper equity between workers
+    ///
+    /// # Arguments
+    ///
+    /// * `workers_connection` - connection used to send requests to all registered workers
+    ///
+    /// * `service_name` - Name of the service for which task has to be sent
+    ///
+    /// * `payload` - Actual payload associated to the service call
+    pub fn send_task_to_worker(
         self: &mut Self,
+        workers_connection: &zmq::Socket,
         service_name: String,
         payload: Vec<Vec<u8>>,
     ) -> Result<(), RustydomoError> {
@@ -65,10 +77,7 @@ impl MajordomoContext {
                 service_name,
                 payload.len()
             );
-            self.tasks_list.push(Task {
-                target_service: service_name.into(),
-                payload,
-            });
+            self.process_tasks(&workers_connection, service_name, payload)?;
         } else {
             return Err(RustydomoError::ServiceNotAvailable(service_name.into()));
         }
@@ -178,59 +187,49 @@ impl MajordomoContext {
     /// This apply a simple round robin mechnism to balance work between multiple workers
     pub fn process_tasks(
         self: &mut Self,
-        workers_connection: &ConnectionData,
+        workers_connection: &zmq::Socket,
+        target_service: String,
+        payload: Vec<Vec<u8>>,
     ) -> Result<(), RustydomoError> {
-        if self.tasks_list.is_empty() {
-            return Ok(());
-        }
+        //             let worker = self
+        //                 .registered_workers
+        //                 .iter_mut()
+        //                 .find(|entry| entry.borrow().service_name == task.target_service);
 
-        for i in 0..self.tasks_list.len() {
-            let task: &Task = self.tasks_list.get(i).unwrap();
-            //             let worker = self
-            //                 .registered_workers
-            //                 .iter_mut()
-            //                 .find(|entry| entry.borrow().service_name == task.target_service);
+        let avail_workers = self.services.get_mut(&target_service).unwrap();
+        let worker = avail_workers.first();
 
-            let avail_workers = self.services.get_mut(&task.target_service).unwrap();
-            let worker = avail_workers.first();
+        match worker {
+            Some(entry) => {
+                log::info!(
+                    "Sending task '{}' on worker '{}'",
+                    target_service,
+                    entry.borrow()
+                );
+                //send identity first, the the rest of the payload
+                workers_connection
+                    .send::<Vec<u8>>(entry.borrow().identity.into(), zmq::SNDMORE)
+                    .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
 
-            match worker {
-                Some(entry) => {
-                    log::info!(
-                        "Sending task '{}' on worker '{}'",
-                        task.target_service,
-                        entry.borrow()
-                    );
-                    //send identity first, the the rest of the payload
-                    workers_connection
-                        .connection
-                        .send::<Vec<u8>>(entry.borrow().identity.into(), zmq::SNDMORE)
-                        .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
+                workers_connection
+                    .send::<&[u8]>("MDPW02".as_bytes(), zmq::SNDMORE)
+                    .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
 
-                    workers_connection
-                        .connection
-                        .send::<&[u8]>("MDPW02".as_bytes(), zmq::SNDMORE)
-                        .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
+                workers_connection
+                    .send_multipart(payload.iter(), 0)
+                    .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
 
-                    workers_connection
-                        .connection
-                        .send_multipart(task.payload.iter(), 0)
-                        .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
-
-                    // rotate worker in a round robin fashion afterwards
-                    if avail_workers.len() > 1 {
-                        avail_workers.rotate_left(1);
-                    }
+                // rotate worker in a round robin fashion afterwards
+                if avail_workers.len() > 1 {
+                    avail_workers.rotate_left(1);
                 }
-                None => log::debug!(
-                    "Task for service '{}' not handled this turn",
-                    &task.target_service
-                ),
             }
+            None => log::debug!(
+                "Task for service '{}' not handled this turn",
+                target_service
+            ),
         }
 
-        // clear all content of tasks list
-        self.tasks_list.clear();
         Ok(())
     }
 

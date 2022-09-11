@@ -18,7 +18,8 @@ fn receive_data(sock: &Socket) -> Result<Message, RustydomoError> {
 }
 
 pub fn handle_client_messages(
-    client_connection: &ConnectionData,
+    clients_connection: &ConnectionData,
+    workers_connection: &ConnectionData,
     ctx: &mut MajordomoContext,
 ) -> Result<(), RustydomoError> {
     // A REQUEST command consists of a multipart message of 4 or more frames, formatted on the wire as follows:
@@ -32,14 +33,14 @@ pub fn handle_client_messages(
     // Vec<Vec<u8>>. It it will be more optimal
 
     // finally retrieve the first element of the actual content : the client id
-    let client_id = receive_data(&client_connection.connection)?;
+    let client_id = receive_data(&clients_connection.connection)?;
     let id = Identity::try_from(&(*client_id)).unwrap();
     log::debug!("Client {:08X} connected", id.value);
 
     // ensure that we are reading a valid MDP client signa by checking its header
     {
         // frame 0 read and handled here
-        let content = receive_data(&client_connection.connection)?;
+        let content = receive_data(&clients_connection.connection)?;
         let obtained = content.as_str().unwrap();
         if obtained != EXPECTED_CLIENT_VERSION_HEADER {
             return Err(RustydomoError::CommunicationError(std::format!(
@@ -51,7 +52,7 @@ pub fn handle_client_messages(
     }
 
     // frame 1 : command type
-    let content = receive_data(&client_connection.connection)?;
+    let content = receive_data(&clients_connection.connection)?;
     let command_type = (*content)[0];
 
     match command_type {
@@ -70,7 +71,7 @@ pub fn handle_client_messages(
     }
 
     // frame 2 : service name
-    let mut content = receive_data(&client_connection.connection)?;
+    let mut content = receive_data(&clients_connection.connection)?;
     let service_name = content.as_str().unwrap().to_string();
     debug!("Service name called : {}", service_name);
     if !ctx.can_handle_service(&service_name) {
@@ -80,7 +81,7 @@ pub fn handle_client_messages(
     // next frames are service-specific
     loop {
         if content.get_more() {
-            content = receive_data(&client_connection.connection)?;
+            content = receive_data(&clients_connection.connection)?;
             final_payload.push((*content).to_vec());
             debug!("Extra frame provided as service specific information");
         } else {
@@ -88,7 +89,7 @@ pub fn handle_client_messages(
         }
     }
     // at this point we can just send the payload to be handled to context
-    ctx.queue_task(service_name, final_payload)?;
+    ctx.send_task_to_worker(&workers_connection.connection, service_name, final_payload)?;
 
     Ok(())
 }

@@ -82,10 +82,12 @@ fn main() -> ! {
 
         match sockets_stimulated {
             Ok(sockets_to_use) => sockets_to_use.iter().for_each(|type_| match type_ {
-                SocketType::ClientSocket => {
-                    handlers::handle_client_messages(&clients_connection, &mut ctx)
-                        .expect("Failed to handle client message")
-                }
+                SocketType::ClientSocket => handlers::handle_client_messages(
+                    &clients_connection,
+                    &workers_connection,
+                    &mut ctx,
+                )
+                .expect("Failed to handle client message"),
                 SocketType::ClientMonitorSocket => {
                     handlers::handle_client_monitor_messages(&clients_connection)
                         .expect("Failed to handle client monitor message")
@@ -104,7 +106,6 @@ fn main() -> ! {
             _ => log::debug!("Erreur hein ?"),
         };
 
-        ctx.process_tasks(&workers_connection).unwrap();
         ctx.check_expired_workers();
         ctx.send_heartbeat(&workers_connection.connection).unwrap();
     }
