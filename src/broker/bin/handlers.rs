@@ -219,7 +219,6 @@ pub fn handle_worker_messages(
                 &worker_connection.connection,
                 &clients_connection.connection,
             )?;
-            log::debug!("End of extra frames");
         }
         x if x == WorkerInteractionType::Disconnect as u8 => {
             ctx.remove_worker(&worker_identity).unwrap_or_else(|err| {
