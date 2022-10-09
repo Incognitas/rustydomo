@@ -3,6 +3,7 @@ use crate::data_structures::{
 };
 use crate::errors::RustydomoError;
 use crate::majordomo_context::MajordomoContext;
+use crate::mmi_handler::handle_mmi_services;
 use log::{debug, info};
 use zmq::{Message, Socket};
 
@@ -60,7 +61,7 @@ pub fn handle_client_messages(
             debug!("Received client request");
 
             let worker_command_type: [u8; 1] = [WorkerInteractionType::Request as u8];
-            // convert client requet to worker request
+            // convert client resquet to worker request
             final_payload.push(worker_command_type.to_vec());
             // do not forget to add the client id in the frame to send
             final_payload.push((*client_id).to_vec());
@@ -74,23 +75,31 @@ pub fn handle_client_messages(
     let mut content = receive_data(&clients_connection.connection)?;
     let service_name = content.as_str().unwrap().to_string();
     debug!("Service name called : {}", service_name);
-    if !ctx.can_handle_service(&service_name) {
-        return Err(RustydomoError::ServiceNotAvailable(service_name.into()));
-    }
 
-    // next frames are service-specific
-    loop {
-        if content.get_more() {
-            content = receive_data(&clients_connection.connection)?;
-            final_payload.push((*content).to_vec());
-            debug!("Extra frame provided as service specific information");
-        } else {
-            break;
+    // check whether or not we have to handle an MMI request before
+    if !handle_mmi_services(
+        &ctx,
+        &service_name,
+        &(*client_id),
+        &clients_connection.connection,
+    ) {
+        // at this point we can just send the payload to be handled to context
+        // next frames are service-specific
+        loop {
+            if content.get_more() {
+                content = receive_data(&clients_connection.connection)?;
+                final_payload.push((*content).to_vec());
+                debug!("Extra frame provided as service specific information");
+            } else {
+                break;
+            }
         }
+        // simple check to ensure we can handle this properly
+        if !ctx.can_handle_service(&service_name) {
+            return Err(RustydomoError::ServiceNotAvailable(service_name.into()));
+        }
+        ctx.send_task_to_worker(&workers_connection.connection, service_name, final_payload)?;
     }
-    // at this point we can just send the payload to be handled to context
-    ctx.send_task_to_worker(&workers_connection.connection, service_name, final_payload)?;
-
     Ok(())
 }
 

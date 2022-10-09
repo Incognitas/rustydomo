@@ -3,6 +3,7 @@ mod data_structures;
 mod errors;
 mod handlers;
 mod majordomo_context;
+mod mmi_handler;
 
 use crate::errors::RustydomoError;
 use data_structures::SocketType;
