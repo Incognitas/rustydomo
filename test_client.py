@@ -27,7 +27,7 @@ def main():
         ]
     )
     fullcontent = sock.recv_multipart()
-    print(formatted_frames(fullcontent))
+    print("Received : ", formatted_frames(fullcontent))
 
     sock.disconnect(addr)
     sock.close()

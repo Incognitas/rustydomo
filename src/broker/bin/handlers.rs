@@ -131,6 +131,48 @@ fn send_residual_data(
     Ok(())
 }
 
+fn handle_worker_partial_final_answer(
+    workers_socket: &zmq::Socket,
+    clients_socket: &zmq::Socket,
+    response_type: ClientInteractionType,
+) -> Result<(), RustydomoError> {
+    let has_payload: bool;
+
+    loop {
+        let client_identity = receive_data(&workers_socket)?;
+
+        // while we are not on an emlpty frame, we continue to send "as is" the frames we receive as they
+        // are considered to be part of the identity packets the client sent
+        if client_identity.len() != 0 {
+            clients_socket
+                .send(client_identity, zmq::SNDMORE)
+                .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
+        } else {
+            has_payload = client_identity.get_more();
+            break;
+        }
+    }
+
+    clients_socket
+        .send::<&[u8]>("MDPC02".as_bytes(), zmq::SNDMORE)
+        .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
+
+    let data_to_send: [u8; 1] = [response_type as u8];
+
+    if has_payload {
+        clients_socket
+            .send(data_to_send.as_slice(), zmq::SNDMORE)
+            .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
+
+        send_residual_data(&workers_socket, &clients_socket)?;
+    } else {
+        clients_socket
+            .send(data_to_send.as_slice(), 0)
+            .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
+    }
+    Ok(())
+}
+
 ///
 /// Handles all messges sent by workers$
 ///
@@ -142,17 +184,17 @@ fn send_residual_data(
 ///
 pub fn handle_worker_messages(
     clients_connection: &ConnectionData,
-    worker_connection: &ConnectionData,
+    workers_connection: &ConnectionData,
     ctx: &mut MajordomoContext,
 ) -> Result<(), RustydomoError> {
     // Frame 0: “MDPW02” (six bytes, representing MDP/Worker v0.2)
     // Frame 1: (one byte, representing READY / REQUEST / HEARTBEAT)
     // next frames are context specific and application specific
-    let worker_identity = receive_data(&worker_connection.connection)?;
+    let worker_identity = receive_data(&workers_connection.connection)?;
     assert!(worker_identity.len() == 5);
 
     // parse command type (frame 0)
-    let content = receive_data(&worker_connection.connection)?;
+    let content = receive_data(&workers_connection.connection)?;
     let obtained = content.as_str().unwrap();
     if obtained != EXPECTED_WORKER_VERSION_HEADER {
         return Err(RustydomoError::CommunicationError(std::format!(
@@ -163,70 +205,35 @@ pub fn handle_worker_messages(
     }
 
     // read frame 1 (command type)
-    let content = receive_data(&worker_connection.connection)?;
+    let content = receive_data(&workers_connection.connection)?;
 
     match (*content)[0] {
         x if x == WorkerInteractionType::Ready as u8 => {
-            let service_name = receive_data(&worker_connection.connection)?;
+            let service_name = receive_data(&workers_connection.connection)?;
             ctx.register_worker(&worker_identity, service_name.as_str().unwrap())?;
         }
         x if x == WorkerInteractionType::Heartbeat as u8 => {
+            // heartbeat are quite easy to handle here
             ctx.refresh_expiration_time(&worker_identity)?;
         }
         x if x == WorkerInteractionType::Partial as u8 => {
             // any time we receive a command from worker, refresh its expiration time ( not only
             // on heartbeat)
             ctx.refresh_expiration_time(&worker_identity)?;
-
-            let client_identity = receive_data(&worker_connection.connection)?;
-            clients_connection
-                .connection
-                .send(client_identity, zmq::SNDMORE)
-                .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
-
-            clients_connection
-                .connection
-                .send::<&[u8]>("MDPC02".as_bytes(), zmq::SNDMORE)
-                .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
-
-            let data_to_send: [u8; 1] = [ClientInteractionType::Partial as u8];
-            clients_connection
-                .connection
-                .send(
-                    data_to_send.as_slice(),
-                    0, /* nop more frames to send */
-                )
-                .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
-
-            send_residual_data(
-                &worker_connection.connection,
+            handle_worker_partial_final_answer(
+                &workers_connection.connection,
                 &clients_connection.connection,
+                ClientInteractionType::Partial,
             )?;
         }
         x if x == WorkerInteractionType::Final as u8 => {
             // any time we receive a command from worker, refresh its expiration time ( not only
             // on heartbeat)
             ctx.refresh_expiration_time(&worker_identity)?;
-            let client_identity = receive_data(&worker_connection.connection)?;
-            clients_connection
-                .connection
-                .send(client_identity, zmq::SNDMORE)
-                .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
-
-            clients_connection
-                .connection
-                .send::<&[u8]>("MDPC02".as_bytes(), zmq::SNDMORE)
-                .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
-
-            let data_to_send: [u8; 1] = [ClientInteractionType::Final as u8];
-            clients_connection
-                .connection
-                .send(data_to_send.as_slice(), zmq::SNDMORE)
-                .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
-
-            send_residual_data(
-                &worker_connection.connection,
+            handle_worker_partial_final_answer(
+                &workers_connection.connection,
                 &clients_connection.connection,
+                ClientInteractionType::Final,
             )?;
         }
         x if x == WorkerInteractionType::Disconnect as u8 => {
