@@ -62,9 +62,9 @@ python3 test_client.py
 
 -  [ ] Integrate basic CI pipelines 
 -  Provide also libs to easily create and register clients and workers:
-  - [ ] In Rust 
-  - [ ] In C++
-  - [ ] Update examples to use those libs
+   - [ ] In Rust 
+   - [ ] In C++
+   - [ ] Update examples to use those libs
 - [ ] Enrich functionnalities to provide services discovery
 - [ ] Add support for authenticity/confidentiality requirements (based on zmq Curve protocol)
 - [ ] and probably other things...
