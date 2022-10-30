@@ -1,9 +1,9 @@
-import zmq
+import zmq.utils.monitor
 import time
 import binascii
 import signal
 import threading
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import logging
 import time
 
@@ -25,9 +25,11 @@ class COMMAND_TYPES:
     DISCONNECT = 0x06
 
 
-class Context:
-    def __init__(self, sock: zmq.Socket):
+class WorkerContext:
+    def __init__(self, name: str, sock: zmq.Socket, mon_sock: zmq.Socket):
+        self.name = name
         self.socket = sock
+        self.monitor_socket = mon_sock
         self.ready = False
         self.response_header = []
         self.last_heartbeat_received: Optional[float] = None
@@ -55,7 +57,7 @@ def formatted_frames(frames: List[bytes]) -> str:
     return b"-".join([binascii.hexlify(i) if len(i) > 0 else b"[]" for i in frames]).decode()
 
 
-def handle_heartbeat(ctx: Context, _frames: List[bytes]):
+def handle_heartbeat(ctx: WorkerContext, _frames: List[bytes]):
     # logging.debug("Broker heartbeat received")
     if ctx.last_heartbeat_received is None:
         # first init
@@ -63,7 +65,7 @@ def handle_heartbeat(ctx: Context, _frames: List[bytes]):
 
     ctx.last_heartbeat_received = time.monotonic()
 
-def handle_request(ctx: Context, frames: List[bytes]):
+def handle_request(ctx: WorkerContext, frames: List[bytes]):
     logging.debug("REQUEST received")
     logging.info("Do something really useful here...")
     # or not :) We just answer FINAL with no specific data 
@@ -72,11 +74,13 @@ def handle_request(ctx: Context, frames: List[bytes]):
     ctx.socket.send_multipart(frames_to_send)
     
 
-def default_callback(_: Context, frames: List[bytes]):
+def default_callback(_: WorkerContext, frames: List[bytes]):
     logging.debug(f"Callback not defined for command type value {formatted_frames(frames)}")
 
 
-def handle_message(ctx: Context, frames: List[bytes]):
+def handle_message(ctx: WorkerContext):
+    ctx.response_header = []
+    frames = ctx.socket.recv_multipart()
     if frames[0] != b"MDPW02":
         logging.error("Invalid command header. Ignoring command")
         logging.debug(formatted_frames(frames))
@@ -102,7 +106,7 @@ def handle_message(ctx: Context, frames: List[bytes]):
 PERIOD = 1  # 1 second period
 
 
-def check_broker_expiration(ctx: Context):
+def check_broker_expiration(ctx: WorkerContext):
     reftime = time.monotonic()
     if ctx.last_heartbeat_received:
         if (ctx.last_heartbeat_received + (4 * PERIOD)) < reftime:
@@ -110,7 +114,8 @@ def check_broker_expiration(ctx: Context):
             logging.error("Broker connection lost")
 
 
-def mark_ready(ctx: Context, service_name: str):
+def mark_ready(ctx: WorkerContext):
+    logging.info("Signalling worker as READY")
     ctx.socket.send_multipart(
         [
             b"MDPW02",
@@ -119,12 +124,12 @@ def mark_ready(ctx: Context, service_name: str):
                     COMMAND_TYPES.READY,
                 ]
             ),
-            service_name.encode(),
+            ctx.name.encode(),
         ]
     )
 
 
-def send_hearbeat(ctx: Context):
+def send_hearbeat(ctx: WorkerContext):
     reftime = time.monotonic()
     if ctx.last_heartbeat_sent is None or (reftime - ctx.last_heartbeat_sent) >(0.8* PERIOD):
         ctx.socket.send_multipart(
@@ -140,7 +145,8 @@ def send_hearbeat(ctx: Context):
         ctx.last_heartbeat_sent = reftime
 
 
-def send_disconnect_command(ctx: Context):
+def send_disconnect_command(ctx: WorkerContext):
+    logging.info("Sending DISCONNECT to broker")
     ctx.socket.send_multipart(
         [
             b"MDPW02",
@@ -152,6 +158,15 @@ def send_disconnect_command(ctx: Context):
         ]
     )
 
+def handle_monitor_events(ctx: WorkerContext):
+    monitor_msgs: Dict[str, Any] = zmq.utils.monitor.recv_monitor_message(ctx.monitor_socket)
+    # expected Dict with keys "event", "value", "endpoint" 
+    if monitor_msgs["event"] == zmq.EVENT_HANDSHAKE_SUCCEEDED:
+        logging.info(f"Connected to the broker on {monitor_msgs['endpoint']}")
+        mark_ready(ctx)
+    elif monitor_msgs["event"] == zmq.EVENT_DISCONNECTED:
+        logging.debug(f"Network connection with broker lost on {monitor_msgs['endpoint']}")
+
 
 def main():
     logging.basicConfig(level=logging.DEBUG)
@@ -161,31 +176,28 @@ def main():
     addr = "tcp://127.0.0.1:6000"
     ctx = zmq.Context()
     sock: zmq.Socket = ctx.socket(zmq.DEALER)
+    mon_sock: zmq.Socket = sock.get_monitor_socket(zmq.EVENT_HANDSHAKE_SUCCEEDED | zmq.EVENT_DISCONNECTED)
     sock.connect(addr)
     time.sleep(0.2)
 
     # always add empty frame at the beginning
     poller: zmq.Poller = zmq.Poller()
     poller.register(sock, zmq.POLLIN)
+    poller.register(mon_sock, zmq.POLLIN)
 
-    ctx = Context(sock)
-
-    mark_ready(ctx, "UBER_SERVICE")
+    ctx = WorkerContext("UBER_SERVICE", sock, mon_sock)
 
     while not termination_signal:
         socks = dict(poller.poll(200))
         if sock in socks and socks[sock] == zmq.POLLIN:
-            message = sock.recv_multipart()
-            # logging.debug(formatted_frames(message))
-            # place ourselves after empty frame
-            header = []
-            ctx.response_header = [] # header
-            handle_message(ctx, message)
+            handle_message(ctx)
+        if mon_sock in socks:
+            handle_monitor_events(ctx)
         # send periodic heartbeat
         # print("HEARTBEAT...")
         send_hearbeat(ctx)
         check_broker_expiration(ctx)
-    print("Sending DISCONNECT")
+
     send_disconnect_command(ctx)
     print("Disconnecting socket")
     # proper close by flushing the queue of remaining messages

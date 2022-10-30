@@ -245,7 +245,7 @@ pub fn handle_worker_messages(
             });
         }
 
-        _ => todo!(),
+        _ => todo!(), // should never happen
     }
     Ok(())
 }
