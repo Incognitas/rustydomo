@@ -1,6 +1,6 @@
 use crate::{data_structures::ClientInteractionType, majordomo_context::MajordomoContext};
 
-fn is_mmi_service(service_name: &str) -> bool {
+pub fn is_mmi_service(service_name: &str) -> bool {
     return service_name.starts_with("mmi.");
 }
 
@@ -21,13 +21,19 @@ pub fn handle_mmi_services(
     client_id: &[u8],
     clients_connection: &zmq::Socket,
 ) -> bool {
-    if !is_mmi_service(service_name) {
+    if !is_mmi_service(&service_name) {
         // nothing to do it it is not an mmi service
         false
     } else {
+        let mut remaining_payload: Vec<Vec<u8>> = Vec::new();
+
         // first of all read all remaining frames left from client
-        let remaining_payload = clients_connection.recv_multipart(0).unwrap();
-        log::debug!("Handling MMI request: {}", service_name);
+        if let Ok(has_more_data) = clients_connection.get_rcvmore() {
+            if has_more_data {
+                remaining_payload = clients_connection.recv_multipart(0).unwrap();
+            }
+        }
+        log::debug!("Handling MMI request: {}", &service_name);
         match service_name {
             "mmi.service" => handle_mmi_service_request(
                 ctx,
@@ -52,16 +58,20 @@ fn handle_mmi_service_request(
     clients_connection: &zmq::Socket,
     payload: Vec<Vec<u8>>,
 ) -> bool {
-    assert!(payload.len() >= 1);
-
-    // we expect at least one parameter : the service name
-    // if it is not the case we just search for an invalid service and it will simply fail
-    let service_to_search =
-        String::from_utf8(payload[0].clone()).unwrap_or("__unknown_service__".into());
-    if !ctx.can_handle_service(&service_to_search) {
-        send_mmi_answer(&clients_connection, &client_id, &service_name, "404");
+    if payload.len() >= 1 {
+        // we expect at least one parameter : the service name
+        // if it is not the case we just search for an invalid service and it will simply fail
+        let service_to_search =
+            String::from_utf8(payload[0].clone()).unwrap_or("__unknown_service__".into());
+        if !ctx.can_handle_service(&service_to_search) {
+            send_mmi_answer(&clients_connection, &client_id, &service_name, "404");
+        } else {
+            send_mmi_answer(&clients_connection, &client_id, &service_name, "200");
+        }
+        true
     } else {
-        send_mmi_answer(&clients_connection, &client_id, &service_name, "200");
+        // if there is no payload we just indicate the error accordingly
+        log::warn!("No parameter passed to mmi.service, ignoring request");
+        false
     }
-    true
 }
