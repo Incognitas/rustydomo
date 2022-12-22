@@ -3,7 +3,7 @@ use crate::data_structures::{
 };
 use crate::errors::RustydomoError;
 use crate::majordomo_context::MajordomoContext;
-use crate::mmi_handler::handle_mmi_services;
+use crate::mmi_handler::{handle_mmi_services, is_mmi_service};
 use log::{debug, info};
 use zmq::{Message, Socket};
 
@@ -77,25 +77,30 @@ pub fn handle_client_messages(
     debug!("Service name called : {}", service_name);
 
     // check whether or not we have to handle an MMI request before
-    if !handle_mmi_services(
-        &ctx,
-        &service_name,
-        &(*client_id),
-        &clients_connection.connection,
-    ) {
-        // at this point we can just send the payload to be handled to context
-        // next frames are service-specific
-        loop {
-            if content.get_more() {
-                content = receive_data(&clients_connection.connection)?;
-                final_payload.push((*content).to_vec());
-                debug!("Extra frame provided as service specific information");
-            } else {
-                break;
+    if is_mmi_service(&service_name) {
+        debug!("MMI service");
+        if !handle_mmi_services(
+            &ctx,
+            &service_name,
+            &(*client_id),
+            &clients_connection.connection,
+        ) {
+            // at this point we can just send the payload to be handled to context
+            // next frames are service-specific
+            loop {
+                if content.get_more() {
+                    content = receive_data(&clients_connection.connection)?;
+                    final_payload.push((*content).to_vec());
+                    debug!("Extra frame provided as service specific information");
+                } else {
+                    break;
+                }
             }
         }
+    } else {
         // simple check to ensure we can handle this properly
         if !ctx.can_handle_service(&service_name) {
+            debug!("Can no handle service '{service_name}'");
             return Err(RustydomoError::ServiceNotAvailable(service_name.into()));
         }
         ctx.send_task_to_worker(&workers_connection.connection, service_name, final_payload)?;
