@@ -1,5 +1,5 @@
 use crate::data_structures::ConnectionData;
-use crate::errors::RustydomoError;
+use domolib::errors::RustydomoError;
 
 use log::{debug, info, log_enabled, Level};
 use zmq::{Context, SocketEvent, SocketType};

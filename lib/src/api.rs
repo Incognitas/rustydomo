@@ -1,4 +1,5 @@
 pub enum ClientError {
+    InitializationError(String),
     CommunicationError(String),
 }
 
@@ -18,7 +19,7 @@ pub trait Request {
 }
 
 pub trait ClientInterface {
-    fn connect(&self, connection_string: &str) -> Result<(), ClientError>;
+    fn connect(&self) -> Result<(), ClientError>;
 
     fn is_connected(&self) -> bool;
 

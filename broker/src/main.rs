@@ -1,12 +1,11 @@
 mod broker_connection;
 mod data_structures;
-mod errors;
 mod handlers;
 mod majordomo_context;
 mod mmi_handler;
 
-use crate::errors::RustydomoError;
 use data_structures::SocketType;
+use domolib::errors::RustydomoError;
 use env_logger::Env;
 use log::info;
 use majordomo_context::MajordomoContext;
@@ -50,15 +49,7 @@ fn main() -> ! {
 
             match zmq::poll(&mut poll_list, 400) {
                 Ok(_) => {
-                    // V1 => filter then map
-                    /*Ok(poll_list
-                    .into_iter()
-                    .enumerate()
-                    .filter(|(_, entry)| -> bool { entry.get_revents() == zmq::POLLIN })
-                    .map(|(idx, _)| SocketType::try_from(idx).expect("invalid socket type"))
-                    .collect::<Vec<SocketType>>())
-                    */
-                    // V2 => filter_map directly
+                    // filter_map directly
                     Ok(poll_list
                         .into_iter()
                         .enumerate()

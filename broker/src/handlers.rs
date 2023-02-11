@@ -1,9 +1,10 @@
 use crate::data_structures::{
-    ClientInteractionType, ConnectionData, Identity, MessageHelper, WorkerInteractionType,
+    ClientInteractionType, ConnectionData, Identity, WorkerInteractionType,
 };
-use crate::errors::RustydomoError;
 use crate::majordomo_context::MajordomoContext;
 use crate::mmi_handler::{handle_mmi_services, is_mmi_service};
+use domolib::errors::RustydomoError;
+use domolib::structures::MessageHelper;
 use log::{debug, info};
 use zmq::{Message, Socket};
 

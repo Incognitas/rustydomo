@@ -1,5 +1,5 @@
 use crate::data_structures::{Identity, WorkerInteractionType};
-use crate::errors::RustydomoError;
+use domolib::errors::RustydomoError;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::{Display, Error, Formatter};
