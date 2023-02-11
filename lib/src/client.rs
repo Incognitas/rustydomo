@@ -1,4 +1,5 @@
 use crate::api::{ClientError, ClientInterface, Request};
+use crate::structures::MessageHelper;
 use std::sync::Arc;
 use std::sync::{atomic::AtomicU64, Mutex};
 use std::thread;
@@ -108,16 +109,10 @@ impl Client {
                         .recv(&mut msg, 0)
                         .expect("Internal socket error");
 
-                    let content = msg.as_str().unwrap().as_bytes();
-                    // TODO: récupérer le code des MessageHelper pour l'extraction de u16 depuis
-                    // les bytes lus
-                    // event number is the first 16 bits of the value
-                    // create fixed array to receive  the value to convert
-                    let mut fixed_array: [u8; 2] = Default::default();
-                    // copy the 2 bytes to convert
-                    fixed_array.copy_from_slice(&content[0..2]);
+                    let helper = MessageHelper { m: msg };
+
                     // return the obtained value
-                    let event_id = u16::from_ne_bytes(fixed_array);
+                    let event_id: u16 = helper.try_into().unwrap();
 
                     match event_id {
                         x if x == zmq::SocketEvent::CONNECTED as u16 => {
