@@ -65,17 +65,19 @@ def handle_heartbeat(ctx: WorkerContext, _frames: List[bytes]):
 
     ctx.last_heartbeat_received = time.monotonic()
 
+
 def handle_request(ctx: WorkerContext, frames: List[bytes]):
     logging.debug("REQUEST received")
     logging.info("Do something really useful here...")
-    # or not :) We just answer FINAL with no specific data 
+    # or not :) We just answer FINAL with no specific data
     frames_to_send = ctx.gen_frames(COMMAND_TYPES.FINAL, payload=[b"answer"])
     logging.debug("sending : {}".format(formatted_frames(frames_to_send)))
     ctx.socket.send_multipart(frames_to_send)
-    
+
 
 def default_callback(_: WorkerContext, frames: List[bytes]):
-    logging.debug(f"Callback not defined for command type value {formatted_frames(frames)}")
+    logging.debug(
+        f"Callback not defined for command type value {formatted_frames(frames)}")
 
 
 def handle_message(ctx: WorkerContext):
@@ -91,9 +93,9 @@ def handle_message(ctx: WorkerContext):
         COMMAND_TYPES.REQUEST: handle_request,
     }
 
-    idx = 2 
-    # retrieve envelope stack and save it in response header 
-    while idx < len(frames) :
+    idx = 2
+    # retrieve envelope stack and save it in response header
+    while idx < len(frames):
         ctx.response_header.append(frames[idx])
         if len(frames[idx]) == 0:
             break
@@ -131,7 +133,7 @@ def mark_ready(ctx: WorkerContext):
 
 def send_hearbeat(ctx: WorkerContext):
     reftime = time.monotonic()
-    if ctx.last_heartbeat_sent is None or (reftime - ctx.last_heartbeat_sent) >(0.8* PERIOD):
+    if ctx.last_heartbeat_sent is None or (reftime - ctx.last_heartbeat_sent) > (0.8 * PERIOD):
         ctx.socket.send_multipart(
             [
                 b"MDPW02",
@@ -158,14 +160,17 @@ def send_disconnect_command(ctx: WorkerContext):
         ]
     )
 
+
 def handle_monitor_events(ctx: WorkerContext):
-    monitor_msgs: Dict[str, Any] = zmq.utils.monitor.recv_monitor_message(ctx.monitor_socket)
-    # expected Dict with keys "event", "value", "endpoint" 
+    monitor_msgs: Dict[str, Any] = zmq.utils.monitor.recv_monitor_message(
+        ctx.monitor_socket)
+    # expected Dict with keys "event", "value", "endpoint"
     if monitor_msgs["event"] == zmq.EVENT_HANDSHAKE_SUCCEEDED:
         logging.info(f"Connected to the broker on {monitor_msgs['endpoint']}")
         mark_ready(ctx)
     elif monitor_msgs["event"] == zmq.EVENT_DISCONNECTED:
-        logging.debug(f"Network connection with broker lost on {monitor_msgs['endpoint']}")
+        logging.debug(
+            f"Network connection with broker lost on {monitor_msgs['endpoint']}")
 
 
 def main():
@@ -176,7 +181,8 @@ def main():
     addr = "tcp://127.0.0.1:6000"
     ctx = zmq.Context()
     sock: zmq.Socket = ctx.socket(zmq.DEALER)
-    mon_sock: zmq.Socket = sock.get_monitor_socket(zmq.EVENT_HANDSHAKE_SUCCEEDED | zmq.EVENT_DISCONNECTED)
+    mon_sock: zmq.Socket = sock.get_monitor_socket(
+        zmq.EVENT_HANDSHAKE_SUCCEEDED | zmq.EVENT_DISCONNECTED)
     sock.connect(addr)
     time.sleep(0.2)
 
@@ -203,7 +209,7 @@ def main():
     # proper close by flushing the queue of remaining messages
     sock.setsockopt(zmq.LINGER, 0)
     sock.disconnect(addr)
-    print("done") 
+    print("done")
 
 
 if __name__ == "__main__":

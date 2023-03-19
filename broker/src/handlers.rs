@@ -2,7 +2,7 @@ use crate::data_structures::{
     ClientInteractionType, ConnectionData, Identity, WorkerInteractionType,
 };
 use crate::majordomo_context::MajordomoContext;
-use crate::mmi_handler::{handle_mmi_services, is_mmi_service};
+use crate::mmi_handler::handle_mmi_services;
 use domolib::errors::RustydomoError;
 use domolib::structures::MessageHelper;
 use log::{debug, info};
@@ -31,14 +31,12 @@ pub fn handle_client_messages(
     // Frames 3+: Request body (opaque binary)
     let mut final_payload: Vec<Vec<u8>> = Vec::new();
 
-    // TODO: replace iter used to fetch command with a single read multipart which fills a
-    // Vec<Vec<u8>>. It it will be more optimal
-
     // finally retrieve the first element of the actual content : the client id
     let client_id = receive_data(&clients_connection.connection)?;
     let id = Identity::try_from(&(*client_id)).unwrap();
-    log::debug!("Client {:08X} connected", id.value);
+    log::debug!("Client {:?} sent a command", id.value);
 
+    assert_eq!(client_id.get_more(), true);
     // ensure that we are reading a valid MDP client signa by checking its header
     {
         // frame 0 read and handled here
@@ -65,7 +63,7 @@ pub fn handle_client_messages(
             // convert client resquet to worker request
             final_payload.push(worker_command_type.to_vec());
             // do not forget to add the client id in the frame to send
-            final_payload.push((*client_id).to_vec());
+            final_payload.push(id.value.clone());
             // then an  empty frame
             final_payload.push(vec![]);
         }
@@ -78,31 +76,27 @@ pub fn handle_client_messages(
     debug!("Service name called : {}", service_name);
 
     // check whether or not we have to handle an MMI request before
-    if is_mmi_service(&service_name) {
-        debug!("MMI service");
-        if !handle_mmi_services(
-            &ctx,
-            &service_name,
-            &(*client_id),
-            &clients_connection.connection,
-        ) {
-            // at this point we can just send the payload to be handled to context
-            // next frames are service-specific
-            loop {
-                if content.get_more() {
-                    content = receive_data(&clients_connection.connection)?;
-                    final_payload.push((*content).to_vec());
-                    debug!("Extra frame provided as service specific information");
-                } else {
-                    break;
-                }
-            }
-        }
-    } else {
+    if !handle_mmi_services(
+        &ctx,
+        &service_name,
+        &(*client_id),
+        &clients_connection.connection,
+    ) {
         // simple check to ensure we can handle this properly
         if !ctx.can_handle_service(&service_name) {
-            debug!("Can no handle service '{service_name}'");
+            debug!("Cannot handle service '{service_name}'");
             return Err(RustydomoError::ServiceNotAvailable(service_name.into()));
+        }
+        // at this point we can just send the payload to be handled to context
+        // next frames are service-specific
+        loop {
+            if content.get_more() {
+                content = receive_data(&clients_connection.connection)?;
+                final_payload.push((*content).to_vec());
+                debug!("Extra frame provided as service specific information");
+            } else {
+                break;
+            }
         }
         ctx.send_task_to_worker(&workers_connection.connection, service_name, final_payload)?;
     }
@@ -197,7 +191,7 @@ pub fn handle_worker_messages(
     // Frame 1: (one byte, representing READY / REQUEST / HEARTBEAT)
     // next frames are context specific and application specific
     let worker_identity = receive_data(&workers_connection.connection)?;
-    assert!(worker_identity.len() == 5);
+    //log::debug!("Received worker identity : {:?}", worker_identity);
 
     // parse command type (frame 0)
     let content = receive_data(&workers_connection.connection)?;

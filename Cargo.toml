@@ -8,12 +8,17 @@ edition = "2021"
 name="broker"
 path = "broker/src/main.rs"
 
+[[bin]]
+name="sample_client"
+path = "sample_client/src/main.rs"
+
 [lib]
 name="domolib"
 path = "lib/src/lib.rs"
 
 
 [dependencies]
+async-trait = "0.1.64"
 env_logger = "0.9.0"
 log = "0.4.17"
 zmq = "0.10.0"
