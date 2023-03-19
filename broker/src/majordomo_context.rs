@@ -72,11 +72,7 @@ impl MajordomoContext {
         payload: Vec<Vec<u8>>,
     ) -> Result<(), RustydomoError> {
         if self.can_handle_service(&service_name) {
-            log::info!(
-                "Queuing task '{}' with payload length being {:?}",
-                service_name,
-                payload
-            );
+            log::info!("Queuing task '{}' with payload length being", service_name,);
             self.process_tasks(&workers_connection, service_name, payload)?;
         } else {
             return Err(RustydomoError::ServiceNotAvailable(service_name.into()));
