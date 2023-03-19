@@ -1,5 +1,5 @@
 use domolib::errors::RustydomoError;
-use zmq::{Message, Socket};
+pub use zmq::Socket;
 
 pub enum SocketType {
     ClientSocket = 0,
