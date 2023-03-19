@@ -15,7 +15,7 @@ struct ServiceInfo {
 
 impl Display for ServiceInfo {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
-        write!(f, "{} : {:08X}", &self.service_name, self.identity.value)?;
+        write!(f, "{} : {:?}", &self.service_name, self.identity.value)?;
         Ok(())
     }
 }
@@ -73,9 +73,9 @@ impl MajordomoContext {
     ) -> Result<(), RustydomoError> {
         if self.can_handle_service(&service_name) {
             log::info!(
-                "Queuing task '{}' with payload length being {}...",
+                "Queuing task '{}' with payload length being {:?}",
                 service_name,
-                payload.len()
+                payload
             );
             self.process_tasks(&workers_connection, service_name, payload)?;
         } else {
@@ -105,9 +105,9 @@ impl MajordomoContext {
         }));
         self.registered_workers.push_front(value_to_insert.clone());
         log::info!(
-            "Registered new worker for service '{}'. Identity : '{}'",
+            "Registered new worker for service '{}'. Identity : '{:?}'",
             service_name,
-            value_to_insert.borrow()
+            identity
         );
 
         // create entry in the map if it does not exist
@@ -175,7 +175,7 @@ impl MajordomoContext {
             log::debug!("Worker removed");
         } else {
             return Err(RustydomoError::ServiceNotAvailable(format!(
-                "Identity : {:08X}",
+                "Identity : {:?}",
                 searched_identity.value
             )));
         }
@@ -208,7 +208,7 @@ impl MajordomoContext {
                 );
                 //send identity first, the the rest of the payload
                 workers_connection
-                    .send::<Vec<u8>>(entry.borrow().identity.into(), zmq::SNDMORE)
+                    .send::<Vec<u8>>(entry.borrow().identity.clone().into(), zmq::SNDMORE)
                     .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
 
                 workers_connection
@@ -272,7 +272,7 @@ impl MajordomoContext {
 
         for worker in self.registered_workers.iter() {
             worker_sock
-                .send::<Vec<u8>>(worker.borrow().identity.into(), zmq::SNDMORE)
+                .send::<Vec<u8>>(worker.borrow().identity.clone().into(), zmq::SNDMORE)
                 .map_err(|err| RustydomoError::CommunicationError(err.to_string()))?;
             // send appropriate header
             worker_sock

@@ -1,133 +1,152 @@
-use crate::api::{ClientError, ClientInterface, Request};
-use crate::structures::MessageHelper;
-use std::sync::Arc;
-use std::sync::{atomic::AtomicU64, Mutex};
-use std::thread;
-use zmq::{SocketEvent, SocketType};
+use crate::api::ClientError;
+use crate::api::ClientRequestState;
+use crate::api::RequestResult;
+use zmq::SocketType;
 
-static GLOBAL_ID_COUNT: AtomicU64 = AtomicU64::new(1); // let's just start at 1 for a change
+const EXPECTED_CLIENT_VERSION_HEADER: &str = "MDPC02";
 
-struct Client {
-    connection_address: String,
-    sock: zmq::Socket,
-    sock_monitor: zmq::Socket,
-    connection_status: zmq::SocketEvent,
+pub struct Client {
+    client_connection: Option<zmq::Socket>,
+}
+
+pub struct ClientRequest<'a> {
+    client: &'a Client,
+    request_ongoing: bool,
 }
 
 impl Client {
-    fn new(connection_string: &str) -> Result<Self, ClientError> {
+    pub fn new(connection_string: &str) -> Result<Self, ClientError> {
         let ctx = zmq::Context::new();
-        // create the address that will be used to connect to the monitor
-        // this allows the creation of multiple clients in same application
-        let monitor_address = format!(
-            "inproc://_client_monitor_{}",
-            GLOBAL_ID_COUNT.load(std::sync::atomic::Ordering::SeqCst)
-        );
-
-        let client_socket = ctx
-            .socket(SocketType::DEALER)
-            .map_err(|err| ClientError::InitializationError(err.to_string()))?;
-
-        // then create the monitor around this connection
-        client_socket
-            .monitor(
-                monitor_address.as_str(),
-                SocketEvent::DISCONNECTED as i32 | SocketEvent::ACCEPTED as i32,
-            )
-            .map_err(|err| ClientError::CommunicationError(err.to_string()))?;
-
-        // create monitor connection for listening to client socket events
-        let sock_monitor = ctx.socket(zmq::PAIR).unwrap();
-        // connect the monitor socket already even if the monitored connection is not activated yet
-        sock_monitor
-            .connect(&monitor_address.as_str())
-            .map_err(|err| ClientError::InitializationError(err.to_string()))?;
-
-        // finally
         let result = Client {
-            connection_address: connection_string.to_owned(),
-            sock: client_socket,
-            sock_monitor,
-            connection_status: zmq::SocketEvent::DISCONNECTED,
+            client_connection: Some(ctx.socket(SocketType::DEALER).unwrap()),
         };
-        // finally activate the connection between the instance and the broker
-        result.connect()?;
+
+        match &result.client_connection {
+            Some(connection) => {
+                connection.connect(&connection_string).unwrap();
+            }
+            _ => {
+                log::error!("Failed to create connection to the broker");
+            }
+        }
 
         return Ok(result);
     }
 }
 
-impl ClientInterface for Client {
-    fn connect(&self) -> Result<(), ClientError> {
-        // create the connection first....
-        self.sock
-            .connect(&self.connection_address)
-            .map_err(|err| ClientError::CommunicationError(err.to_string()))?;
-        Ok(())
-    }
-
-    fn is_connected(&self) -> bool {
-        self.connection_status == zmq::SocketEvent::CONNECTED
-    }
-
-    fn send_request(
+impl Client {
+    pub fn send_request(
         &self,
         service_name: &str,
         payload: &Vec<Vec<u8>>,
-    ) -> Result<Box<dyn Request>, ClientError> {
-        todo!()
-    }
-
-    fn disconnect(&self) -> bool {
-        if let Ok(_) = self.sock.disconnect(&self.connection_address) {
-            true
-        } else {
-            false
+    ) -> Option<ClientRequest> {
+        let result = ClientRequest {
+            client: &self,
+            request_ongoing: true,
+        };
+        if let Some(connection) = &self.client_connection {
+            let request_type: [u8; 1] = [1];
+            connection.send("MDPC02".as_bytes(), zmq::SNDMORE).unwrap();
+            connection
+                .send(request_type.as_slice(), zmq::SNDMORE)
+                .unwrap();
+            connection.send(service_name, zmq::SNDMORE).unwrap();
+            connection.send_multipart(payload, 0).unwrap();
+            return Some(result);
         }
+
+        None
     }
 }
+fn receive_and_check_broker_response(sock: &zmq::Socket) -> Option<RequestResult> {
+    // we assume here that we have data waiting for us
+    let mut msg = zmq::Message::new();
 
-impl Client {
-    fn start_poller_thread(this: Arc<Mutex<Self>>) {
-        // TODO:
-        // THis background thread will:
-        // - create the connection and the monitor
-        // - interact with the cleint ionstance through inproc
-        //
-        thread::spawn(move || loop {
-            let mut locked_self = this.lock().expect("Mutex poisoned");
+    sock.recv(&mut msg, 0)
+        .expect("Failed to receive response header");
 
-            let mut poll_item_list = [locked_self.sock_monitor.as_poll_item(zmq::POLLIN)];
+    // ensure that we received the MDPC02 client header
 
-            match zmq::poll(&mut poll_item_list, 200) {
-                Ok(_) => {
-                    // poll events from Monitor socket at this point, this is the onl
-                    // one we are listening to
-                    let mut msg: zmq::Message = zmq::Message::new();
-                    locked_self
-                        .sock_monitor
-                        .recv(&mut msg, 0)
-                        .expect("Internal socket error");
+    if let Some(obtained) = msg.as_str() {
+        match obtained {
+            EXPECTED_CLIENT_VERSION_HEADER => sock.recv(&mut msg, 0).unwrap(),
+            _ => {
+                log::error!("Unrecognized client version received");
+                return None;
+            }
+        }
+    }
 
-                    let helper = MessageHelper { m: msg };
+    // now check the type of command (PARTIAL/FINAL)
+    // if they are found, just push the payload by receiving the rest of the frames
+    match msg.into_iter().nth(0) {
+        Some(&x) if x == ClientRequestState::PARTIAL as u8 => {
+            return Some(RequestResult {
+                state: ClientRequestState::PARTIAL,
+                payload: sock.recv_multipart(0).unwrap(),
+            })
+        }
+        Some(&x) if x == ClientRequestState::FINAL as u8 => {
+            return Some(RequestResult {
+                state: ClientRequestState::FINAL,
+                payload: sock.recv_multipart(0).unwrap(),
+            })
+        }
+        Some(state) => {
+            log::error!("Unrecognized state : {}", state);
+            return None;
+        }
+        _ => return None,
+    };
+}
 
-                    // return the obtained value
-                    let event_id: u16 = helper.try_into().unwrap();
+impl<'a> Iterator for ClientRequest<'a> {
+    type Item = RequestResult;
 
-                    match event_id {
-                        x if x == zmq::SocketEvent::CONNECTED as u16 => {
-                            locked_self.connection_status = zmq::SocketEvent::CONNECTED;
+    fn next(&mut self) -> Option<Self::Item> {
+        // no need to poll if request is finished
+        if !self.request_ongoing {
+            return None;
+        };
+
+        match &self.client.client_connection {
+            Some(connection) => loop {
+                let mut poll_list = [connection.as_poll_item(zmq::POLLIN)];
+
+                // time to poll events for all sockets
+                match zmq::poll(&mut poll_list, 100) {
+                    Ok(nbitemspolled) => {
+                        if nbitemspolled > 0 {
+                            // we only have one socket to monitor, no need to over engineer this
+                            let returned_state = receive_and_check_broker_response(&connection);
+                            match &returned_state {
+                                Some(entry) => {
+                                    // update request status based on returned state
+                                    if entry.state == ClientRequestState::FINAL {
+                                        // if it is the final answer, we consider this step the final
+                                        // one
+                                        log::debug!("End of the current loop");
+                                        self.request_ongoing = false;
+                                    }
+                                }
+                                None => (),
+                            }
+                            return returned_state;
                         }
-                        x if x == zmq::SocketEvent::DISCONNECTED as u16 => {
-                            locked_self.connection_status = zmq::SocketEvent::DISCONNECTED;
-                        }
-                        _ => {
-                            log::error!("Unrecognized event : {}", event_id)
+
+                        // request is actually ongoing, just continue looping
+                        if self.request_ongoing {
+                            // nothing to do, just continue looping
+                            continue;
                         }
                     }
+                    Err(_) => (),
                 }
-                Err(err) => log::error!("Failed to poll data: {}", err.to_string()),
-            };
-        });
+            },
+            None => (),
+        }
+
+        println!("la");
+        return None;
     }
 }

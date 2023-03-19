@@ -1,33 +1,16 @@
+#[derive(Debug)]
 pub enum ClientError {
     InitializationError(String),
     CommunicationError(String),
 }
 
-pub enum RequestState {
-    PARTIAL,
-    FINAL,
+#[derive(Debug, PartialEq, Eq)]
+pub enum ClientRequestState {
+    PARTIAL = 2,
+    FINAL = 3,
 }
 
 pub struct RequestResult {
-    state: RequestState,
-    payload: Vec<Vec<u8>>,
-}
-
-pub trait Request {
-    fn is_over(&self) -> bool;
-    fn read_status(&self) -> Result<RequestResult, ClientError>;
-}
-
-pub trait ClientInterface {
-    fn connect(&self) -> Result<(), ClientError>;
-
-    fn is_connected(&self) -> bool;
-
-    fn send_request(
-        &self,
-        service_name: &str,
-        payload: &Vec<Vec<u8>>,
-    ) -> Result<Box<dyn Request>, ClientError>;
-
-    fn disconnect(&self) -> bool;
+    pub state: ClientRequestState,
+    pub payload: Vec<Vec<u8>>,
 }
