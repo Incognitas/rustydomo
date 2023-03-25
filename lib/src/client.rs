@@ -1,9 +1,23 @@
-use crate::api::ClientError;
-use crate::api::ClientRequestState;
-use crate::api::RequestResult;
 use zmq::SocketType;
 
 const EXPECTED_CLIENT_VERSION_HEADER: &str = "MDPC02";
+
+#[derive(Debug)]
+pub enum ClientError {
+    InitializationError(String),
+    CommunicationError(String),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ClientRequestState {
+    PARTIAL = 2,
+    FINAL = 3,
+}
+
+pub struct RequestResult {
+    pub state: ClientRequestState,
+    pub payload: Vec<Vec<u8>>,
+}
 
 pub struct Client {
     client_connection: Option<zmq::Socket>,
@@ -146,7 +160,6 @@ impl<'a> Iterator for ClientRequest<'a> {
             None => (),
         }
 
-        println!("la");
         return None;
     }
 }

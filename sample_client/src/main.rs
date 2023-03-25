@@ -1,4 +1,5 @@
-use domolib::{api::ClientRequestState, client::Client};
+use domolib::client::Client;
+use domolib::client::ClientRequestState;
 use env_logger::Env;
 
 fn main() {

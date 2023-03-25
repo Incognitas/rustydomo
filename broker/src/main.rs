@@ -13,7 +13,7 @@ use zmq::Context;
 
 fn main() -> ! {
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
-    println!("{}", "001".parse::<u32>().unwrap());
+
     info!("Welcome to The Majordomo Broker");
     let zmq_ctx = Context::new();
     info!("Creating clients related connection...");
