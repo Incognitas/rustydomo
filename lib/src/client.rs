@@ -1,20 +1,16 @@
+use crate::errors::ClientError;
 use zmq::SocketType;
 
 const EXPECTED_CLIENT_VERSION_HEADER: &str = "MDPC02";
 
-#[derive(Debug)]
-pub enum ClientError {
-    InitializationError(String),
-    CommunicationError(String),
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub enum ClientRequestState {
+    REQUEST = 1,
     PARTIAL = 2,
     FINAL = 3,
 }
 
-pub struct RequestResult {
+pub struct ClientRequestResult {
     pub state: ClientRequestState,
     pub payload: Vec<Vec<u8>>,
 }
@@ -29,7 +25,7 @@ pub struct ClientRequest<'a> {
 }
 
 impl Client {
-    pub fn new(connection_string: &str) -> Result<Self, ClientError> {
+    pub fn new(broker_connection_string: &str) -> Result<Self, ClientError> {
         let ctx = zmq::Context::new();
         let result = Client {
             client_connection: Some(ctx.socket(SocketType::DEALER).unwrap()),
@@ -37,7 +33,7 @@ impl Client {
 
         match &result.client_connection {
             Some(connection) => {
-                connection.connect(&connection_string).unwrap();
+                connection.connect(&broker_connection_string).unwrap();
             }
             _ => {
                 log::error!("Failed to create connection to the broker");
@@ -59,8 +55,10 @@ impl Client {
             request_ongoing: true,
         };
         if let Some(connection) = &self.client_connection {
-            let request_type: [u8; 1] = [1];
-            connection.send("MDPC02".as_bytes(), zmq::SNDMORE).unwrap();
+            let request_type: [u8; 1] = [ClientRequestState::REQUEST as u8];
+            connection
+                .send(EXPECTED_CLIENT_VERSION_HEADER, zmq::SNDMORE)
+                .unwrap();
             connection
                 .send(request_type.as_slice(), zmq::SNDMORE)
                 .unwrap();
@@ -72,7 +70,8 @@ impl Client {
         None
     }
 }
-fn receive_and_check_broker_response(sock: &zmq::Socket) -> Option<RequestResult> {
+
+fn receive_and_check_broker_response(sock: &zmq::Socket) -> Option<ClientRequestResult> {
     // we assume here that we have data waiting for us
     let mut msg = zmq::Message::new();
 
@@ -95,13 +94,13 @@ fn receive_and_check_broker_response(sock: &zmq::Socket) -> Option<RequestResult
     // if they are found, just push the payload by receiving the rest of the frames
     match msg.into_iter().nth(0) {
         Some(&x) if x == ClientRequestState::PARTIAL as u8 => {
-            return Some(RequestResult {
+            return Some(ClientRequestResult {
                 state: ClientRequestState::PARTIAL,
                 payload: sock.recv_multipart(0).unwrap(),
             })
         }
         Some(&x) if x == ClientRequestState::FINAL as u8 => {
-            return Some(RequestResult {
+            return Some(ClientRequestResult {
                 state: ClientRequestState::FINAL,
                 payload: sock.recv_multipart(0).unwrap(),
             })
@@ -115,7 +114,7 @@ fn receive_and_check_broker_response(sock: &zmq::Socket) -> Option<RequestResult
 }
 
 impl<'a> Iterator for ClientRequest<'a> {
-    type Item = RequestResult;
+    type Item = ClientRequestResult;
 
     fn next(&mut self) -> Option<Self::Item> {
         // no need to poll if request is finished

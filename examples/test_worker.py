@@ -117,7 +117,7 @@ def check_broker_expiration(ctx: WorkerContext):
 
 
 def mark_ready(ctx: WorkerContext):
-    logging.info("Signalling worker as READY")
+    logging.info("Signaling worker as READY")
     ctx.socket.send_multipart(
         [
             b"MDPW02",

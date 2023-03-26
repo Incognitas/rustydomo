@@ -43,3 +43,15 @@ impl fmt::Display for RustydomoError {
         }
     }
 }
+
+#[derive(Debug)]
+pub enum ClientError {
+    InitializationError(String),
+    CommunicationError(String),
+}
+
+#[derive(Debug)]
+pub enum WorkerError {
+    InitializationError(String),
+    CommunicationError(String),
+}

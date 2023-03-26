@@ -17,6 +17,7 @@ fn main() {
                 ClientRequestState::FINAL => {
                     log::debug!("Final answer received");
                 }
+                _ => (), // ignore other states
             }
         }
     }
