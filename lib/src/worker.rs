@@ -18,22 +18,25 @@ pub struct WorkerRequestResult {
     pub payload: Vec<Vec<u8>>,
 }
 
+pub type TaskHandlerFunction = fn(&Worker, &Vec<Vec<u8>>) -> ();
+
 pub struct Worker {
     worker_connection: Option<zmq::Socket>,
     task_handled: String,
-}
-
-pub struct WorkerRequest<'a> {
-    worker: &'a Worker,
-    request_ongoing: bool,
+    task_handler: TaskHandlerFunction,
 }
 
 impl Worker {
-    pub fn new(task_name: String, broker_connection_string: &str) -> Result<Self, WorkerError> {
+    pub fn new(
+        task_name: String,
+        broker_connection_string: &str,
+        handler: TaskHandlerFunction,
+    ) -> Result<Self, WorkerError> {
         let ctx = zmq::Context::new();
         let result = Worker {
             worker_connection: Some(ctx.socket(SocketType::DEALER).unwrap()),
             task_handled: task_name,
+            task_handler: handler,
         };
 
         match &result.worker_connection {
@@ -128,15 +131,9 @@ fn receive_and_handle_broker_request(sock: &zmq::Socket) -> Option<WorkerRequest
     // now check the type of command (PARTIAL/FINAL)
     // if they are found, just push the payload by receiving the rest of the frames
     match msg.into_iter().nth(0) {
-        Some(&x) if x == WorkerRequestState::PARTIAL as u8 => {
+        Some(&x) if x == WorkerRequestState::REQUEST as u8 => {
             return Some(WorkerRequestResult {
-                state: WorkerRequestState::PARTIAL,
-                payload: sock.recv_multipart(0).unwrap(),
-            })
-        }
-        Some(&x) if x == WorkerRequestState::FINAL as u8 => {
-            return Some(WorkerRequestResult {
-                state: WorkerRequestState::FINAL,
+                state: WorkerRequestState::REQUEST,
                 payload: sock.recv_multipart(0).unwrap(),
             })
         }
@@ -151,17 +148,10 @@ fn receive_and_handle_broker_request(sock: &zmq::Socket) -> Option<WorkerRequest
     };
 }
 
-impl<'a> Iterator for WorkerRequest<'a> {
-    type Item = WorkerRequestResult;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        // no need to poll if request is finished
-        if !self.request_ongoing {
-            return None;
-        };
-
-        match &self.worker.worker_connection {
-            Some(connection) => loop {
+impl Worker {
+    pub fn process(&self) {
+        match &self.worker_connection {
+            Some(connection) => {
                 let mut poll_list = [connection.as_poll_item(zmq::POLLIN)];
 
                 // time to poll events for all sockets
@@ -173,41 +163,21 @@ impl<'a> Iterator for WorkerRequest<'a> {
                             match &returned_state {
                                 Some(entry) => match entry.state {
                                     // update request status based on returned state
-                                    WorkerRequestState::FINAL => {
-                                        // if it is the final answer, we consider this step the final
-                                        // one and we will end iteration
-                                        log::debug!("End of the current loop");
-                                        self.request_ongoing = false;
-                                    }
-                                    WorkerRequestState::HEARTBEAT => {
-                                        // TODO: handle hearbeats from broker (refresh timestamps)
-                                        continue;
-                                    }
-                                    WorkerRequestState::PARTIAL => {
-                                        // nothing to do, just let it through
+                                    WorkerRequestState::REQUEST => {
+                                        (self.task_handler)(&self, &entry.payload);
                                     }
                                     _ => {
                                         log::error!("Unhandled state received : {:?}", entry.state);
-                                        continue;
                                     }
                                 },
                                 None => (),
                             }
-                            return returned_state;
-                        }
-
-                        // request is actually ongoing, just continue looping
-                        if self.request_ongoing {
-                            // nothing to do, just continue looping
-                            continue;
                         }
                     }
                     Err(_) => (),
                 }
-            },
+            }
             None => (),
         }
-
-        return None;
     }
 }
