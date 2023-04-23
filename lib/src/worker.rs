@@ -1,4 +1,6 @@
 use crate::errors::WorkerError;
+use std::time::Duration;
+use std::time::Instant;
 use zmq::SocketType;
 
 const EXPECTED_WORKER_VERSION_HEADER: &str = "MDPW02";
@@ -15,15 +17,17 @@ pub enum WorkerRequestState {
 
 pub struct WorkerRequestResult {
     pub state: WorkerRequestState,
-    pub payload: Vec<Vec<u8>>,
+    pub payload: Option<Vec<Vec<u8>>>,
 }
 
-pub type TaskHandlerFunction = fn(&Worker, &Vec<Vec<u8>>) -> ();
+pub type TaskHandlerFunction = fn(&Worker, &Option<Vec<Vec<u8>>>) -> ();
 
 pub struct Worker {
     worker_connection: Option<zmq::Socket>,
     task_handled: String,
     task_handler: TaskHandlerFunction,
+    connected: bool,
+    last_broker_keepalive_time: Instant,
 }
 
 impl Worker {
@@ -33,15 +37,18 @@ impl Worker {
         handler: TaskHandlerFunction,
     ) -> Result<Self, WorkerError> {
         let ctx = zmq::Context::new();
-        let result = Worker {
+        let mut result = Worker {
             worker_connection: Some(ctx.socket(SocketType::DEALER).unwrap()),
             task_handled: task_name,
             task_handler: handler,
+            connected: false,
+            last_broker_keepalive_time: Instant::now(),
         };
 
         match &result.worker_connection {
             Some(connection) => {
                 connection.connect(&broker_connection_string).unwrap();
+                result.connected = true;
             }
             _ => {
                 log::error!("Failed to create connection to the broker");
@@ -51,7 +58,7 @@ impl Worker {
         return Ok(result);
     }
 
-    pub fn register_to_broker(&self) -> Result<(), WorkerError> {
+    pub fn register_to_broker(&mut self) -> Result<(), WorkerError> {
         if let Some(connection) = &self.worker_connection {
             let request_type: [u8; 1] = [WorkerRequestState::READY as u8];
             connection
@@ -63,6 +70,7 @@ impl Worker {
             connection.send(self.task_handled.as_str(), 0).unwrap();
 
             log::info!("Registered worker for task '{}'", self.task_handled);
+            self.connected = true;
 
             Ok(())
         } else {
@@ -107,6 +115,10 @@ impl Worker {
             ))
         }
     }
+
+    pub fn check_broker_connection_expired(&self) -> bool {
+        return (Instant::now() - self.last_broker_keepalive_time) > Duration::from_secs(1);
+    }
 }
 
 fn receive_and_handle_broker_request(sock: &zmq::Socket) -> Option<WorkerRequestResult> {
@@ -134,11 +146,20 @@ fn receive_and_handle_broker_request(sock: &zmq::Socket) -> Option<WorkerRequest
         Some(&x) if x == WorkerRequestState::REQUEST as u8 => {
             return Some(WorkerRequestResult {
                 state: WorkerRequestState::REQUEST,
-                payload: sock.recv_multipart(0).unwrap(),
+                payload: Some(sock.recv_multipart(0).unwrap()),
             })
         }
         Some(&x) if x == WorkerRequestState::HEARTBEAT as u8 => {
-            todo!("Handle heartbeat sent by the broker")
+            return Some(WorkerRequestResult {
+                state: WorkerRequestState::HEARTBEAT,
+                payload: None,
+            })
+        }
+        Some(&x) if x == WorkerRequestState::DISCONNECT as u8 => {
+            return Some(WorkerRequestResult {
+                state: WorkerRequestState::DISCONNECT,
+                payload: None,
+            })
         }
         Some(state) => {
             log::error!("Unhandled state : {}", state);
@@ -149,7 +170,7 @@ fn receive_and_handle_broker_request(sock: &zmq::Socket) -> Option<WorkerRequest
 }
 
 impl Worker {
-    pub fn process(&self) {
+    pub fn process(&mut self) {
         match &self.worker_connection {
             Some(connection) => {
                 let mut poll_list = [connection.as_poll_item(zmq::POLLIN)];
@@ -164,7 +185,19 @@ impl Worker {
                                 Some(entry) => match entry.state {
                                     // update request status based on returned state
                                     WorkerRequestState::REQUEST => {
-                                        (self.task_handler)(&self, &entry.payload);
+                                        if self.connected {
+                                            (self.task_handler)(&self, &entry.payload);
+                                        } else {
+                                            log::error!("Received request to execute task '{}' although the worker is not READY.", self.task_handled);
+                                        }
+                                    }
+                                    WorkerRequestState::DISCONNECT => {
+                                        // mark as not connected to ensure the READY signal will be
+                                        // sent next time a command has to be sent
+                                        self.connected = false;
+                                    }
+                                    WorkerRequestState::HEARTBEAT => {
+                                        self.last_broker_keepalive_time = Instant::now();
                                     }
                                     _ => {
                                         log::error!("Unhandled state received : {:?}", entry.state);
